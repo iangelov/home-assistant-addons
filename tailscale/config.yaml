@@ -1,0 +1,33 @@
+name: 'Tailscale'
+version: '1.40.0-3'
+slug: 'tailscale-ha'
+description: 'A zero config VPN'
+url: 'https://github.com/iangelov/home-assistant-addons/tree/main/tailscale'
+arch:
+  - armhf
+  - armv7
+  - aarch64
+  - amd64
+  - i386
+startup: services
+boot: auto
+host_network: true
+privileged:
+  - NET_ADMIN
+devices:
+  - '/dev/net/tun'
+map:
+  - ssl:rw
+init: false
+options:
+  hostname: homeassistant
+  advertised_routes: []
+schema:
+  auth_key: str
+  advertised_routes:
+    - str
+  advertise_exit_node: bool?
+  port: int(0,65535)?
+  hostname: str?
+  force_reauth: bool?
+  certificate_domain: str?
