@@ -11,7 +11,7 @@ ENV LANG C.UTF-8
 COPY /files/install.sh /
 RUN chmod u+x,go= /install.sh && /install.sh "$BUILD_ARCH" "$TAILSCALE_VERSION"
 
-RUN apk add --update-cache iptables
+RUN apk add --no-cache iptables ip6tables
 
 COPY run.sh /
 RUN chmod a+x /run.sh
