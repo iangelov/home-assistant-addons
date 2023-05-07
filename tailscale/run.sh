@@ -19,7 +19,8 @@ if bashio::config.has_value 'advertised_routes'; then
   for route in $(bashio::config 'advertised_routes'); do
     routes+="${route},"
   done
-  TAILSCALE_FLAGS+=('--advertise-routes' "$(echo $routes | sed 's/,\s*$//')")
+   # shellcheck disable=SC2001
+  TAILSCALE_FLAGS+=('--advertise-routes' "$(echo "$routes" | sed 's/,\s*$//')")
 fi
 
 if bashio::config.has_value 'auth_key'; then
