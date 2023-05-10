@@ -1,7 +1,7 @@
 #!/usr/bin/with-contenv bashio
 # shellcheck shell=bash
 
-set -eum
+set -Eeum -o pipefail
 
 # CONFIG_PATH="/data/options.json"
 TAILSCALE_SOCKET="/var/run/tailscale/tailscaled.sock"

@@ -1,5 +1,5 @@
-#!/usr/bin/env sh
-set -eu
+#!/usr/bin/env bash
+set -Eeum -o pipefail
 
 echo "ARGS: $*"
 
