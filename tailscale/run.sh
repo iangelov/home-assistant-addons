@@ -3,7 +3,6 @@
 
 set -Eeum -o pipefail
 
-# CONFIG_PATH="/data/options.json"
 TAILSCALE_SOCKET="/var/run/tailscale/tailscaled.sock"
 TAILSCALE_FLAGS=()
 TAILSCALED_FLAGS=("--statedir" "/data" "--state" "/data/tailscaled.state" "--socket" "${TAILSCALE_SOCKET}")
