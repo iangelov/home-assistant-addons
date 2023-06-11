@@ -1,5 +1,5 @@
 name: 'Tailscale'
-version: '1.42.0-1'
+version: '1.42.0-2'
 slug: 'tailscale-ha'
 description: 'A zero config VPN'
 url: 'https://github.com/iangelov/home-assistant-addons/tree/main/tailscale'
@@ -22,6 +22,7 @@ init: false
 options:
   hostname: homeassistant
   advertised_routes: []
+  tags: []
 schema:
   auth_key: str
   advertised_routes:
