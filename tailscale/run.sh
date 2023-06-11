@@ -22,6 +22,15 @@ if bashio::config.has_value 'advertised_routes'; then
   TAILSCALE_FLAGS+=('--advertise-routes' "$(echo "$routes" | sed 's/,\s*$//')")
 fi
 
+if bashio::config.has_value 'tags'; then
+  tags=""
+  for tag in $(bashio::config 'tags'); do
+    tags+="${tag},"
+  done
+   # shellcheck disable=SC2001
+  TAILSCALE_FLAGS+=('--advertise-tags' "$(echo "$tags" | sed 's/,\s*$//')")
+fi
+
 if bashio::config.has_value 'auth_key'; then
   TAILSCALE_FLAGS+=('--authkey' "$(bashio::config 'auth_key')")
 fi
