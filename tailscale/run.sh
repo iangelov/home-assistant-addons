@@ -60,7 +60,7 @@ i=0
 while test $i -lt 12; do
   if test -e "$TAILSCALE_SOCKET"; then
     # bring up the tunnel
-    tailscale --socket "$TAILSCALE_SOCKET" up "${TAILSCALE_FLAGS[@]}"
+    tailscale --socket "$TAILSCALE_SOCKET" up --reset "${TAILSCALE_FLAGS[@]}"
     if ! test -z "$TAILSCALE_CERTIFICATE_FQDN"; then
       tailscale cert --cert-file /ssl/fullchain.pem --key-file /ssl/privkey.pem "$TAILSCALE_CERTIFICATE_FQDN"
     fi
