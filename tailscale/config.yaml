@@ -1,5 +1,5 @@
 name: 'Tailscale'
-version: '1.50.1'
+version: '1.52.0'
 slug: 'tailscale-ha'
 description: 'A zero config VPN'
 url: 'https://github.com/iangelov/home-assistant-addons/tree/main/tailscale'
