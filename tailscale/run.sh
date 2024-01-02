@@ -13,6 +13,12 @@ if bashio::config.has_value 'advertise_exit_node'; then
   fi
 fi
 
+if bashio::config.has_value 'advertise_connector'; then
+  if bashio::config.true 'advertise_connector'; then
+    TAILSCALE_FLAGS+=("--advertise-connector")
+  fi
+fi
+
 if bashio::config.has_value 'advertised_routes'; then
   routes=""
   for route in $(bashio::config 'advertised_routes'); do
