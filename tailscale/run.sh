@@ -6,6 +6,7 @@ set -Eeum -o pipefail
 TAILSCALE_SOCKET="/var/run/tailscale/tailscaled.sock"
 TAILSCALE_FLAGS=()
 TAILSCALED_FLAGS=("--statedir" "/data" "--state" "/data/tailscaled.state" "--socket" "${TAILSCALE_SOCKET}")
+PROXY_SERVE_HA=false
 
 if bashio::config.has_value 'advertise_exit_node'; then
   if bashio::config.true 'advertise_exit_node'; then
@@ -59,6 +60,12 @@ if bashio::config.has_value 'hostname' && bashio::config.has_value 'certificate_
   TAILSCALE_CERTIFICATE_FQDN="$(bashio::config 'hostname').$(bashio::config 'certificate_domain')"
 fi
 
+if bashio::config.has_value 'proxy_serve_ha'; then
+  if bashio::config.true 'proxy_serve_ha'; then
+    PROXY_SERVE_HA=true
+  fi
+fi
+
 tailscaled -cleanup "${TAILSCALED_FLAGS[@]}"
 tailscaled "${TAILSCALED_FLAGS[@]}" &
 
@@ -70,6 +77,11 @@ while test $i -lt 12; do
     if ! test -z "$TAILSCALE_CERTIFICATE_FQDN"; then
       tailscale cert --cert-file /ssl/fullchain.pem --key-file /ssl/privkey.pem "$TAILSCALE_CERTIFICATE_FQDN"
     fi
+
+    if [ "$PROXY_SERVE_HA" = true ]; then
+      tailscale serve --bg --https 443 http://localhost:8123
+    fi
+
     # put Tailscale in foreground
     fg
     exit $?
