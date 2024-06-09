@@ -79,7 +79,7 @@ while test $i -lt 12; do
     fg
     exit $?
   else
-    i++
+    (( i+=1 ))
     echo "tailscaled hasn't started yet, sleeping for 5 seconds..."
     sleep 5
   fi
