@@ -1,6 +1,6 @@
-name: "Tailscale"
-version: "1.66.4-r0"
-slug: "tailscale-ha"
+name: Tailscale
+version: 1.66.4
+slug: tailscale-ha
 description: "A zero config VPN"
 url: "https://github.com/iangelov/home-assistant-addons/tree/main/tailscale"
 arch:
