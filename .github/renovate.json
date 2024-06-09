@@ -8,7 +8,7 @@
       "fileMatch": ["^tailscale/build.yaml$"],
       "matchStringsStrategy": "any",
       "matchStrings": [
-        "TAILSCALE_VERSION:\\s+(?<currentValue>\\S+)"
+        "TAILSCALE_VERSION:\\s+\"(?<currentValue>\\S+)\""
       ],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "tailscale/tailscale"
@@ -17,7 +17,7 @@
       "fileMatch": ["^tailscale/config.yaml$"],
       "matchStringsStrategy": "any",
       "matchStrings": [
-        "version:\\s+(?<currentValue>\\S+)"
+        "version:\\s+\"(?<currentValue>\\S+)\""
       ],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "tailscale/tailscale"
