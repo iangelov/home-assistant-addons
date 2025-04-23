@@ -1,5 +1,5 @@
 name: Tailscale
-version: "1.82.5"
+version: "1.82.5-1"
 slug: tailscale-ha
 description: "A zero config VPN"
 url: "https://github.com/iangelov/home-assistant-addons/tree/main/tailscale"
@@ -34,3 +34,4 @@ schema:
   hostname: str?
   force_reauth: bool?
   proxy_serve_ha: bool?
+  webclient: bool?

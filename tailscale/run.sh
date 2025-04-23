@@ -5,6 +5,7 @@ set -Eeum -o pipefail
 
 TAILSCALE_SOCKET="/var/run/tailscale/tailscaled.sock"
 TAILSCALE_FLAGS=()
+TAILSCALE_SET_FLAGS=()
 TAILSCALED_FLAGS=("--statedir" "/data" "--state" "/data/tailscaled.state" "--socket" "${TAILSCALE_SOCKET}")
 PROXY_SERVE_HA=false
 
@@ -62,6 +63,12 @@ if bashio::config.has_value 'proxy_serve_ha'; then
   fi
 fi
 
+if bashio::config.has_value 'webclient'; then
+  if bashio::config.true 'webclient'; then
+    TAILSCALE_SET_FLAGS+=('--webclient=true')
+  fi
+fi
+
 tailscaled -cleanup "${TAILSCALED_FLAGS[@]}"
 tailscaled "${TAILSCALED_FLAGS[@]}" &
 
@@ -70,6 +77,10 @@ while test $i -lt 12; do
   if test -e "$TAILSCALE_SOCKET"; then
     # bring up the tunnel
     tailscale --socket "$TAILSCALE_SOCKET" up --reset "${TAILSCALE_FLAGS[@]}"
+
+    if [ "${#TAILSCALE_SET_FLAGS[@]}" -gt 0 ]; then
+      tailscale set "${TAILSCALE_SET_FLAGS[@]}"
+    fi
 
     if [ "$PROXY_SERVE_HA" = true ]; then
       tailscale serve --bg --https 443 http://localhost:8123
