@@ -6,7 +6,7 @@ FROM homeassistant/${BUILD_ARCH}-base:${ALPINE_VERSION}
 ARG BUILD_ARCH
 ARG TAILSCALE_VERSION
 
-ENV LANG C.UTF-8
+ENV LANG=C.UTF-8
 
 COPY /files/install.sh /
 RUN chmod u+x,go= /install.sh && /install.sh "$BUILD_ARCH" "$TAILSCALE_VERSION"
