@@ -4,7 +4,7 @@ set -Eeum -o pipefail
 echo "ARGS: $*"
 
 BUILD_ARCH="$1"
-TAILSCALE_VERSION="$2"
+TAILSCALE_VERSION="${2#v}"
 
 case "$BUILD_ARCH" in
   "armhf" | "armv7")
