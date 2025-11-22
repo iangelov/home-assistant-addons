@@ -4,11 +4,8 @@ slug: tailscale-ha
 description: "A zero config VPN"
 url: "https://github.com/iangelov/home-assistant-addons/tree/main/tailscale"
 arch:
-  - armhf
-  - armv7
   - aarch64
   - amd64
-  - i386
 startup: services
 boot: auto
 host_network: true

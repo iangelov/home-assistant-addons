@@ -21,6 +21,16 @@
       ],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "tailscale/tailscale"
+    },
+    {
+      "fileMatch": ["^tailscale/build.yaml$"],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "\\s+(?:aarch64|amd64):\\s+ghcr\\.io/hassio-addons/base/(?:aarch64|amd64):(?<currentValue>[0-9.]+)"
+      ],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "ghcr.io/hassio-addons/base",
+      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
@@ -32,6 +42,12 @@
     {
       "matchDatasources": ["github-releases"],
       "matchDepNames": ["tailscale/tailscale"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
+      "matchDatasources": ["docker"],
+      "matchDepNames": ["ghcr.io/hassio-addons/base"],
       "matchUpdateTypes": ["minor", "patch"],
       "automerge": true
     }
