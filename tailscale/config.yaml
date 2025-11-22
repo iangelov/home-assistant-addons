@@ -6,6 +6,7 @@ url: "https://github.com/iangelov/home-assistant-addons/tree/main/tailscale"
 arch:
   - aarch64
   - amd64
+image: "ghcr.io/iangelov/addon-tailscale-{arch}"
 startup: services
 boot: auto
 host_network: true
