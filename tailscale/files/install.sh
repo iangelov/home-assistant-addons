@@ -7,17 +7,11 @@ BUILD_ARCH="$1"
 TAILSCALE_VERSION="${2#v}"
 
 case "$BUILD_ARCH" in
-  "armhf" | "armv7")
-    TAILSCALE_ARCH="arm"
-    ;;
   "aarch64")
     TAILSCALE_ARCH="arm64"
     ;;
   "amd64")
     TAILSCALE_ARCH="amd64"
-    ;;
-  "i386")
-    TAILSCALE_ARCH="386"
     ;;
 esac
 
