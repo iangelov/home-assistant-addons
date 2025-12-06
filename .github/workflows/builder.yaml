@@ -53,3 +53,29 @@ jobs:
             --image "$(echo ${{ steps.info.outputs.image }} | cut -d'/' -f3)" \
             --docker-hub "ghcr.io/${{ github.repository_owner }}" \
             --addon
+
+  cleanup:
+    runs-on: ubuntu-24.04
+    name: Clean up old container images
+    needs: build
+    if: github.event_name == 'push'
+    strategy:
+      matrix:
+        arch: ["aarch64", "amd64"]
+    permissions:
+      packages: write
+
+    steps:
+      - name: Delete untagged images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: addon-tailscale-${{ matrix.arch }}
+          package-type: container
+          delete-only-untagged-versions: true
+
+      - name: Keep only 5 most recent tagged versions
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: addon-tailscale-${{ matrix.arch }}
+          package-type: container
+          min-versions-to-keep: 5
