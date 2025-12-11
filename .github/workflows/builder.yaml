@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
     name: Build ${{ matrix.arch }} tailscale add-on
     strategy:
+      fail-fast: false
       matrix:
         arch: ["aarch64", "amd64"]
     permissions:
@@ -60,6 +61,7 @@ jobs:
     needs: build
     if: github.event_name == 'push'
     strategy:
+      fail-fast: false
       matrix:
         arch: ["aarch64", "amd64"]
     permissions:
