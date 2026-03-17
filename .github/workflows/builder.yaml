@@ -38,7 +38,7 @@ jobs:
         uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.03.0
         with:
           architectures: '["aarch64", "amd64"]'
-          image-name: addon-tailscale
+          image-name: app-tailscale
 
   build:
     runs-on: ${{ matrix.os }}
@@ -46,8 +46,7 @@ jobs:
     needs: prepare
     strategy:
       fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     permissions:
       contents: read
       packages: write
@@ -93,7 +92,7 @@ jobs:
         uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.03.0
         with:
           architectures: '["aarch64", "amd64"]'
-          image-name: addon-tailscale
+          image-name: app-tailscale
           image-tags: ${{ needs.prepare.outputs.version }}
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -112,13 +111,13 @@ jobs:
       - name: Delete untagged images
         uses: actions/delete-package-versions@v5
         with:
-          package-name: addon-tailscale-${{ matrix.arch }}
+          package-name: ${{ matrix.arch }}-app-tailscale
           package-type: container
           delete-only-untagged-versions: true
 
       - name: Keep only 5 most recent tagged versions
         uses: actions/delete-package-versions@v5
         with:
-          package-name: addon-tailscale-${{ matrix.arch }}
+          package-name: ${{ matrix.arch }}-app-tailscale
           package-type: container
           min-versions-to-keep: 5
