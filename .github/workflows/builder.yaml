@@ -22,7 +22,7 @@ jobs:
       contents: read
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
-      version: ${{ steps.info.outputs.version }}
+      version: ${{ fromJSON(steps.info.outputs.version) }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
