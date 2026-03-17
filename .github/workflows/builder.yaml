@@ -15,50 +15,91 @@ on:
       - '.github/workflows/builder.yaml'
 
 jobs:
-  build:
+  prepare:
     runs-on: ubuntu-24.04
-    name: Build ${{ matrix.arch }} tailscale add-on
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: ["aarch64", "amd64"]
+    name: Prepare build matrix
     permissions:
       contents: read
-      packages: write
-
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      version: ${{ fromJSON(steps.info.outputs.version) }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Get information
+      - name: Get add-on information
         id: info
         uses: home-assistant/actions/helpers/info@master
         with:
           path: "./tailscale"
 
-      - name: Login to GitHub Container Registry
-        if: github.event_name == 'push'
-        uses: docker/login-action@v4
+      - name: Prepare multi-arch matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.03.1
         with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          architectures: '["aarch64", "amd64"]'
+          image-name: app-tailscale
+
+  build:
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.arch }} tailscale add-on
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Extract build args from build.yaml
+        id: build-yaml
+        run: |
+          BUILD_FROM=$(yq '.build_from.${{ matrix.arch }}' tailscale/build.yaml)
+          TAILSCALE_VERSION=$(yq '.args.TAILSCALE_VERSION' tailscale/build.yaml)
+          echo "build-from=${BUILD_FROM}" >> "$GITHUB_OUTPUT"
+          echo "tailscale-version=${TAILSCALE_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Build tailscale add-on
-        uses: home-assistant/builder@2026.03.1
+        uses: home-assistant/builder/actions/build-image@2026.03.1
         with:
-          args: |
-            ${{ github.event_name == 'pull_request' && '--test' || '' }} \
-            --${{ matrix.arch }} \
-            --target /data/tailscale \
-            --image "$(echo ${{ steps.info.outputs.image }} | cut -d'/' -f3)" \
-            --docker-hub "ghcr.io/${{ github.repository_owner }}" \
-            --addon
+          arch: ${{ matrix.arch }}
+          image: ${{ matrix.image }}
+          image-tags: ${{ needs.prepare.outputs.version }}
+          version: ${{ needs.prepare.outputs.version }}
+          context: tailscale
+          build-args: |
+            BUILD_FROM=${{ steps.build-yaml.outputs.build-from }}
+            BUILD_ARCH=${{ matrix.arch }}
+            TAILSCALE_VERSION=${{ steps.build-yaml.outputs.tailscale-version }}
+          push: ${{ github.event_name == 'push' }}
+          cosign: ${{ github.event_name == 'push' }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  manifest:
+    runs-on: ubuntu-24.04
+    name: Publish multi-arch manifest
+    needs: [prepare, build]
+    if: github.event_name == 'push'
+    permissions:
+      packages: write
+      id-token: write
+    steps:
+      - name: Publish multi-arch manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.03.1
+        with:
+          architectures: '["aarch64", "amd64"]'
+          image-name: app-tailscale
+          image-tags: ${{ needs.prepare.outputs.version }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
 
   cleanup:
     runs-on: ubuntu-24.04
     name: Clean up old container images
-    needs: build
+    needs: manifest
     if: github.event_name == 'push'
     strategy:
       fail-fast: false
@@ -66,18 +107,17 @@ jobs:
         arch: ["aarch64", "amd64"]
     permissions:
       packages: write
-
     steps:
       - name: Delete untagged images
         uses: actions/delete-package-versions@v5
         with:
-          package-name: addon-tailscale-${{ matrix.arch }}
+          package-name: ${{ matrix.arch }}-app-tailscale
           package-type: container
           delete-only-untagged-versions: true
 
       - name: Keep only 5 most recent tagged versions
         uses: actions/delete-package-versions@v5
         with:
-          package-name: addon-tailscale-${{ matrix.arch }}
+          package-name: ${{ matrix.arch }}-app-tailscale
           package-type: container
           min-versions-to-keep: 5
