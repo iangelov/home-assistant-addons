@@ -35,7 +35,7 @@ jobs:
 
       - name: Prepare multi-arch matrix
         id: matrix
-        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.03.1
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.03.2
         with:
           architectures: '["aarch64", "amd64"]'
           image-name: app-tailscale
@@ -64,7 +64,7 @@ jobs:
           echo "tailscale-version=${TAILSCALE_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Build tailscale add-on
-        uses: home-assistant/builder/actions/build-image@2026.03.1
+        uses: home-assistant/builder/actions/build-image@2026.03.2
         with:
           arch: ${{ matrix.arch }}
           image: ${{ matrix.image }}
@@ -89,7 +89,7 @@ jobs:
       id-token: write
     steps:
       - name: Publish multi-arch manifest
-        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.03.1
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.03.2
         with:
           architectures: '["aarch64", "amd64"]'
           image-name: app-tailscale
