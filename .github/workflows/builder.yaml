@@ -114,6 +114,7 @@ jobs:
           package-name: ${{ matrix.arch }}-app-tailscale
           package-type: container
           delete-only-untagged-versions: true
+          min-versions-to-keep: 10
 
       - name: Keep only 5 most recent tagged versions
         uses: actions/delete-package-versions@v5
