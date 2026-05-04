@@ -5,10 +5,10 @@
   ],
   "regexManagers": [
     {
-      "fileMatch": ["^tailscale/build.yaml$"],
+      "fileMatch": ["^tailscale/Dockerfile$"],
       "matchStringsStrategy": "any",
       "matchStrings": [
-        "TAILSCALE_VERSION:\\s+\"(?<currentValue>\\S+)\""
+        "ARG TAILSCALE_VERSION=\"(?<currentValue>\\S+)\""
       ],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "tailscale/tailscale"
@@ -23,10 +23,10 @@
       "depNameTemplate": "tailscale/tailscale"
     },
     {
-      "fileMatch": ["^tailscale/build.yaml$"],
+      "fileMatch": ["^tailscale/Dockerfile$"],
       "matchStringsStrategy": "any",
       "matchStrings": [
-        "\\s+(?:aarch64|amd64):\\s+ghcr\\.io/hassio-addons/base/(?:aarch64|amd64):(?<currentValue>[0-9.]+)"
+        "ARG BASE_IMAGE_VERSION=(?<currentValue>[0-9.]+)"
       ],
       "datasourceTemplate": "docker",
       "depNameTemplate": "ghcr.io/hassio-addons/base",

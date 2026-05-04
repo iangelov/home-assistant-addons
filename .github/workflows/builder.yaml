@@ -55,14 +55,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Extract build args from build.yaml
-        id: build-yaml
-        run: |
-          BUILD_FROM=$(yq '.build_from.${{ matrix.arch }}' tailscale/build.yaml)
-          TAILSCALE_VERSION=$(yq '.args.TAILSCALE_VERSION' tailscale/build.yaml)
-          echo "build-from=${BUILD_FROM}" >> "$GITHUB_OUTPUT"
-          echo "tailscale-version=${TAILSCALE_VERSION}" >> "$GITHUB_OUTPUT"
-
       - name: Build tailscale add-on
         uses: home-assistant/builder/actions/build-image@2026.03.2
         with:
@@ -71,10 +63,6 @@ jobs:
           image-tags: ${{ needs.prepare.outputs.version }}
           version: ${{ needs.prepare.outputs.version }}
           context: tailscale
-          build-args: |
-            BUILD_FROM=${{ steps.build-yaml.outputs.build-from }}
-            BUILD_ARCH=${{ matrix.arch }}
-            TAILSCALE_VERSION=${{ steps.build-yaml.outputs.tailscale-version }}
           push: ${{ github.event_name == 'push' }}
           cosign: ${{ github.event_name == 'push' }}
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
