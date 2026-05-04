@@ -13,10 +13,14 @@ case "$BUILD_ARCH" in
   "amd64")
     TAILSCALE_ARCH="amd64"
     ;;
+  *)
+    echo "Unsupported architecture: ${BUILD_ARCH}" >&2
+    exit 1
+    ;;
 esac
 
 echo "Downloading Tailscale ${TAILSCALE_VERSION} for ${BUILD_ARCH}..."
 
-curl -Ss "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${TAILSCALE_ARCH}.tgz" -o - | tar zxf -
+curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${TAILSCALE_ARCH}.tgz" -o - | tar zxf -
 mv "tailscale_${TAILSCALE_VERSION}_${TAILSCALE_ARCH}/tailscale"* /bin/
 rm -rf "tailscale_${TAILSCALE_VERSION}_${TAILSCALE_ARCH}"
