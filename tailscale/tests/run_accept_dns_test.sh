@@ -8,7 +8,16 @@ set -Eeuo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 run_script="${repo_root}/tailscale/run.sh"
 tmpdir=$(mktemp -d)
-trap 'rm -rf "${tmpdir}"' EXIT
+cleanup_test() {
+  local pidfile pid
+  for pidfile in "${tmpdir}"/tailscaled-*.pid; do
+    [[ -r "${pidfile}" ]] || continue
+    pid=$(<"${pidfile}")
+    kill -TERM "${pid}" 2>/dev/null || true
+  done
+  rm -rf "${tmpdir}"
+}
+trap cleanup_test EXIT
 
 mkdir -p "${tmpdir}/bin" "${tmpdir}/socket"
 
@@ -48,6 +57,15 @@ esac
 make_fake tailscaled '
 if [[ "${1-}" == "-cleanup" ]]; then exit 0; fi
 : > "${TAILSCALE_SOCKET}"
+: "${TAILSCALED_PID_LOG:=/dev/null}"
+: "${TAILSCALED_SIGNAL_LOG:=/dev/null}"
+printf "%s\\n" "$$" > "${TAILSCALED_PID_LOG}"
+on_signal() { printf "%s\\n" "$1" >> "${TAILSCALED_SIGNAL_LOG}"; exit 0; }
+trap "on_signal TERM" TERM
+trap "on_signal INT" INT
+if [[ "${FAKE_TAILSCALED_FOREVER:-false}" == true ]]; then
+  while :; do sleep 0.1; done
+fi
 sleep "${FAKE_TAILSCALED_SLEEP:-0.01}"
 '
 # shellcheck disable=SC2016 # The generated fake expands variables at runtime.
@@ -174,6 +192,43 @@ run_delayed_resolver_exit() {
 # leaving the add-on up without a complete MagicDNS path or fail-safe teardown.
 run_delayed_resolver_exit ingress
 run_delayed_resolver_exit egress
+
+run_signal_case() {
+  local signal=$1 expected_status=$2 timeout_pid child_pid status
+  : > "${tmpdir}/socket/signal-${signal}.sock"
+  : > "${tmpdir}/magicdns-signal-${signal}.log"
+  PATH="${tmpdir}/bin:${PATH}" \
+    TAILSCALE_SOCKET="${tmpdir}/socket/signal-${signal}.sock" \
+    MAGICDNS_RUNTIME_DIR="${tmpdir}/runtime-signal-${signal}" \
+    TAILSCALE_TEST_LOG="${tmpdir}/calls-signal-${signal}.log" \
+    MAGICDNS_RESOLVER="${tmpdir}/bin/magicdns-resolver" \
+    MAGICDNS_TEST_LOG="${tmpdir}/magicdns-signal-${signal}.log" \
+    UNSHARE_TEST_LOG="${tmpdir}/unshare-signal-${signal}.log" \
+    TAILSCALED_PID_LOG="${tmpdir}/tailscaled-${signal}.pid" \
+    TAILSCALED_SIGNAL_LOG="${tmpdir}/tailscaled-${signal}.signals" \
+    FAKE_ACCEPT_DNS=false FAKE_TAILSCALED_FOREVER=true \
+    timeout --signal="${signal}" --preserve-status 2 bash "${run_script}" &
+  timeout_pid=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [[ -s "${tmpdir}/tailscaled-${signal}.pid" ]] && break
+    sleep 0.1
+  done
+  [[ -s "${tmpdir}/tailscaled-${signal}.pid" ]] || { echo "FAIL: ${signal} case did not start tailscaled" >&2; exit 1; }
+  child_pid=$(<"${tmpdir}/tailscaled-${signal}.pid")
+  set +e
+  wait "${timeout_pid}"
+  status=$?
+  set -e
+  [[ "${status}" -eq "${expected_status}" ]] || { printf 'FAIL: expected %s exit %s, got %s\\n' "${signal}" "${expected_status}" "${status}" >&2; exit 1; }
+  grep -Fx "${signal}" "${tmpdir}/tailscaled-${signal}.signals"
+  grep -Fx cleanup "${tmpdir}/magicdns-signal-${signal}.log"
+  ! kill -0 "${child_pid}" 2>/dev/null || { echo "FAIL: ${signal} left tailscaled running" >&2; exit 1; }
+}
+
+# Production break caught: after tailscaled became a background child, an
+# add-on TERM/INT could exit the parent and leave the daemon or resolvers live.
+run_signal_case TERM 143
+run_signal_case INT 130
 
 run_case true
 run_case false

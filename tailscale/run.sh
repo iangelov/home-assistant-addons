@@ -37,6 +37,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
+forward_signal() {
+  local signal=$1 exit_status=$2
+  trap - TERM INT
+  if [[ -n "${TAILSCALED_PID}" ]]; then
+    kill -s "${signal}" "${TAILSCALED_PID}" 2>/dev/null || true
+    wait "${TAILSCALED_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${MAGICDNS_SUPERVISOR_PID}" ]]; then
+    kill -TERM "${MAGICDNS_SUPERVISOR_PID}" 2>/dev/null || true
+    wait "${MAGICDNS_SUPERVISOR_PID}" 2>/dev/null || true
+  fi
+  exit "${exit_status}"
+}
+trap 'forward_signal TERM 143' TERM
+trap 'forward_signal INT 130' INT
+
 if bashio::config.true 'accept_dns'; then
   ACCEPT_DNS=true
   TAILSCALE_FLAGS+=("--accept-dns=true")

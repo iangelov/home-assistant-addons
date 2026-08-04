@@ -45,7 +45,7 @@ case " $args " in
   *" -C "*) check=${args/ -C / -A }; grep -Fqx -- "$check" "$state" ;;
   *" -A "*)
     printf "%s\\n" "$args" >> "${state}.attempts"
-    if [[ "${FAKE_FAIL_ADD_ONCE_AT:-0}" != 0 ]]; then
+    if [[ "${FAKE_FAIL_ADD_ONCE_AT:-0}" != 0 && ( -z "${FAKE_FAIL_TOOL:-}" || "${FAKE_FAIL_TOOL}" == "$(basename "$0")" ) ]]; then
       count=$(grep -c -- " -A " "$state" || true)
       if [[ "$count" -eq "$FAKE_FAIL_ADD_ONCE_AT" && ! -e "${state}.add-failed" ]]; then touch "${state}.add-failed"; exit 46; fi
     fi
@@ -57,7 +57,7 @@ case " $args " in
     ;;
   *" -I "*)
     printf "%s\\n" "$args" >> "${state}.insert-attempts"
-    if [[ "${FAKE_FAIL_INSERT_ONCE_AT:-0}" != 0 ]]; then
+    if [[ "${FAKE_FAIL_INSERT_ONCE_AT:-0}" != 0 && ( -z "${FAKE_FAIL_TOOL:-}" || "${FAKE_FAIL_TOOL}" == "$(basename "$0")" ) ]]; then
       count=$(wc -l < "${state}.insert-attempts")
       if [[ "$count" -eq "$FAKE_FAIL_INSERT_ONCE_AT" && ! -e "${state}.insert-failed" ]]; then touch "${state}.insert-failed"; exit 48; fi
     fi
@@ -68,7 +68,7 @@ case " $args " in
   *" -D "*)
     printf "%s\\n" "$args" >> "${state}.delete-attempts"
     [[ "${FAKE_FAIL_DELETE:-false}" == true ]] && exit 45
-    if [[ "${FAKE_FAIL_DELETE_ONCE_AT:-0}" != 0 ]]; then
+    if [[ "${FAKE_FAIL_DELETE_ONCE_AT:-0}" != 0 && ( -z "${FAKE_FAIL_TOOL:-}" || "${FAKE_FAIL_TOOL}" == "$(basename "$0")" ) ]]; then
       count=$(wc -l < "${state}.delete-attempts")
       if [[ "$count" -eq "$FAKE_FAIL_DELETE_ONCE_AT" && ! -e "${state}.delete-failed" ]]; then touch "${state}.delete-failed"; exit 47; fi
     fi
@@ -162,22 +162,25 @@ assert_rule_count 0 "${tmpdir}/state/iptables"
 # Production breaks caught: one intermediate rule failure is masked by a later
 # successful rule under `if !`, for forwarding, temporary protection, or cleanup.
 rm -f "${tmpdir}/state/iptables" "${tmpdir}/state/ip6tables" "${tmpdir}/state/"*.add-failed "${tmpdir}/state/"*.attempts
-if PATH="${tmpdir}/bin:${PATH}" FAKE_NAT_STATE="${tmpdir}/state" FAKE_FAIL_ADD_ONCE_AT=1 MAGICDNS_RUNTIME_DIR="${tmpdir}/runtime" TAILSCALE_SOCKET="${tmpdir}/tailscaled.sock" bash "${bridge_script}" setup; then
+if PATH="${tmpdir}/bin:${PATH}" FAKE_NAT_STATE="${tmpdir}/state" FAKE_FAIL_ADD_ONCE_AT=1 FAKE_FAIL_TOOL=iptables MAGICDNS_RUNTIME_DIR="${tmpdir}/runtime" TAILSCALE_SOCKET="${tmpdir}/tailscaled.sock" bash "${bridge_script}" setup; then
   echo 'FAIL: forwarding setup hid an intermediate rule failure' >&2; exit 1
 fi
 [[ $(wc -l < "${tmpdir}/state/iptables.attempts") -gt 2 ]] || { echo 'FAIL: forwarding setup did not attempt later rules' >&2; exit 1; }
+[[ -s "${tmpdir}/state/ip6tables.attempts" ]] || { echo 'FAIL: forwarding setup skipped IPv6 after IPv4 failure' >&2; exit 1; }
 rm -f "${tmpdir}/state/iptables" "${tmpdir}/state/ip6tables" "${tmpdir}/state/"*.insert-failed "${tmpdir}/state/"*.insert-attempts
-if PATH="${tmpdir}/bin:${PATH}" FAKE_NAT_STATE="${tmpdir}/state" FAKE_FAIL_INSERT_ONCE_AT=2 MAGICDNS_RUNTIME_DIR="${tmpdir}/runtime" TAILSCALE_SOCKET="${tmpdir}/tailscaled.sock" bash "${bridge_script}" setup-drop; then
+if PATH="${tmpdir}/bin:${PATH}" FAKE_NAT_STATE="${tmpdir}/state" FAKE_FAIL_INSERT_ONCE_AT=2 FAKE_FAIL_TOOL=iptables MAGICDNS_RUNTIME_DIR="${tmpdir}/runtime" TAILSCALE_SOCKET="${tmpdir}/tailscaled.sock" bash "${bridge_script}" setup-drop; then
   echo 'FAIL: temporary protection hid an intermediate rule failure' >&2; exit 1
 fi
 [[ $(wc -l < "${tmpdir}/state/iptables.insert-attempts") -gt 2 ]] || { echo 'FAIL: temporary protection did not attempt later rules' >&2; exit 1; }
+[[ -s "${tmpdir}/state/ip6tables.insert-attempts" ]] || { echo 'FAIL: temporary protection skipped IPv6 after IPv4 failure' >&2; exit 1; }
 
 rm -f "${tmpdir}/state/"*.delete-attempts "${tmpdir}/state/"*.delete-failed
 run_bridge setup
-if PATH="${tmpdir}/bin:${PATH}" FAKE_NAT_STATE="${tmpdir}/state" FAKE_FAIL_DELETE_ONCE_AT=2 MAGICDNS_RUNTIME_DIR="${tmpdir}/runtime" TAILSCALE_SOCKET="${tmpdir}/tailscaled.sock" bash "${bridge_script}" cleanup; then
+if PATH="${tmpdir}/bin:${PATH}" FAKE_NAT_STATE="${tmpdir}/state" FAKE_FAIL_DELETE_ONCE_AT=2 FAKE_FAIL_TOOL=iptables MAGICDNS_RUNTIME_DIR="${tmpdir}/runtime" TAILSCALE_SOCKET="${tmpdir}/tailscaled.sock" bash "${bridge_script}" cleanup; then
   echo 'FAIL: cleanup hid an intermediate rule deletion failure' >&2; exit 1
 fi
 [[ $(wc -l < "${tmpdir}/state/iptables.delete-attempts") -gt 2 ]] || { echo 'FAIL: cleanup did not attempt later rule deletions' >&2; exit 1; }
+[[ -s "${tmpdir}/state/ip6tables.delete-attempts" ]] || { echo 'FAIL: cleanup skipped IPv6 after IPv4 failure' >&2; exit 1; }
 run_bridge cleanup
 
 # Production break caught: a forwarding deletion failure must leave the

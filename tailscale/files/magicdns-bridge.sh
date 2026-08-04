@@ -125,13 +125,19 @@ with_family_rules() {
 }
 
 cleanup() {
+  local result=0
   RULE_TO_PORT="${DNS_PORT}"
   RULE_ACTION='A'
   if ! load_cached_addresses; then
     discover_addresses || return 0
   fi
-  if ! with_family_rules remove iptables "${MAGIC_DNS_IPV4}" "${tailscale_ipv4}" "${ha_dns_ipv4}" "${ha_supervisor_ipv4}" || \
-    ! with_family_rules remove ip6tables "${MAGIC_DNS_IPV6}" "[${tailscale_ipv6}]" "${ha_dns_ipv6}" "${ha_supervisor_ipv6}"; then
+  if ! with_family_rules remove iptables "${MAGIC_DNS_IPV4}" "${tailscale_ipv4}" "${ha_dns_ipv4}" "${ha_supervisor_ipv4}"; then
+    result=1
+  fi
+  if ! with_family_rules remove ip6tables "${MAGIC_DNS_IPV6}" "[${tailscale_ipv6}]" "${ha_dns_ipv6}" "${ha_supervisor_ipv6}"; then
+    result=1
+  fi
+  if [[ "${result}" -ne 0 ]]; then
     log 'MagicDNS forwarding cleanup failed; retaining temporary protection' >&2
     return 1
   fi
@@ -139,12 +145,18 @@ cleanup() {
 }
 
 setup_drop() {
+  local result=0
   discover_ha_addresses
   save_drop_addresses
   RULE_TO_PORT=0
   RULE_ACTION='I'
-  if ! with_family_rules install iptables "${MAGIC_DNS_IPV4}" '127.0.0.1' "${ha_dns_ipv4}" "${ha_supervisor_ipv4}" || \
-    ! with_family_rules install ip6tables "${MAGIC_DNS_IPV6}" '[::1]' "${ha_dns_ipv6}" "${ha_supervisor_ipv6}"; then
+  if ! with_family_rules install iptables "${MAGIC_DNS_IPV4}" '127.0.0.1' "${ha_dns_ipv4}" "${ha_supervisor_ipv4}"; then
+    result=1
+  fi
+  if ! with_family_rules install ip6tables "${MAGIC_DNS_IPV6}" '[::1]' "${ha_dns_ipv6}" "${ha_supervisor_ipv6}"; then
+    result=1
+  fi
+  if [[ "${result}" -ne 0 ]]; then
     log 'MagicDNS temporary DROP setup failed; removing partial state' >&2
     remove_drop || true
     return 1
@@ -163,12 +175,18 @@ remove_drop() {
 }
 
 setup() {
+  local result=0
   RULE_TO_PORT="${DNS_PORT}"
   RULE_ACTION='A'
   discover_addresses
   save_addresses
-  if ! with_family_rules install iptables "${MAGIC_DNS_IPV4}" "${tailscale_ipv4}" "${ha_dns_ipv4}" "${ha_supervisor_ipv4}" || \
-    ! with_family_rules install ip6tables "${MAGIC_DNS_IPV6}" "[${tailscale_ipv6}]" "${ha_dns_ipv6}" "${ha_supervisor_ipv6}"; then
+  if ! with_family_rules install iptables "${MAGIC_DNS_IPV4}" "${tailscale_ipv4}" "${ha_dns_ipv4}" "${ha_supervisor_ipv4}"; then
+    result=1
+  fi
+  if ! with_family_rules install ip6tables "${MAGIC_DNS_IPV6}" "[${tailscale_ipv6}]" "${ha_dns_ipv6}" "${ha_supervisor_ipv6}"; then
+    result=1
+  fi
+  if [[ "${result}" -ne 0 ]]; then
     log 'MagicDNS bridge setup failed; removing partial forwarding state' >&2
     cleanup || true
     return 1
