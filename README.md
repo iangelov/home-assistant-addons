@@ -14,6 +14,10 @@ terminal (the add-on only reports when this is missing; it never changes it):
 ha dns options --servers dns://100.100.100.100
 ```
 
+> [!WARNING]
+> This replaces the Supervisor DNS servers list. Configure ordinary fallback
+> DNS through the HAOS Network settings.
+
 To undo that change, run:
 
 ```sh

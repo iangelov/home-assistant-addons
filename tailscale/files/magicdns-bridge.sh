@@ -112,13 +112,16 @@ install_rule() {
 with_family_rules() {
   local action=$1 tool=$2 destination=$3 target=$4
   shift 4
-  local source protocol
+  local source protocol result=0
   for source in "$@"; do
     [[ -n "${source}" ]] || continue
     for protocol in udp tcp; do
-      "${action}_rule" "${tool}" "${source}" "${destination}" "${target}" "${protocol}"
+      if ! "${action}_rule" "${tool}" "${source}" "${destination}" "${target}" "${protocol}"; then
+        result=1
+      fi
     done
   done
+  return "${result}"
 }
 
 cleanup() {

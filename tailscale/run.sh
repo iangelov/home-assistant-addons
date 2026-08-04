@@ -13,6 +13,9 @@ PROXY_SERVE_HA=false
 ACCEPT_DNS=false
 MAGICDNS_ACTIVE=false
 AUTH_KEY_FILE=''
+TAILSCALED_PID=''
+MAGICDNS_SUPERVISOR_PID=''
+MAGICDNS_SUPERVISOR_FAILURE_FILE="${MAGICDNS_RUNTIME_DIR}/magicdns-supervisor.failed"
 
 run_magicdns() {
   ACCEPT_DNS="${ACCEPT_DNS}" MAGICDNS_RUNTIME_DIR="${MAGICDNS_RUNTIME_DIR}" "${MAGICDNS_RESOLVER}" "$@"
@@ -28,6 +31,7 @@ cleanup() {
     fi
   fi
   [[ -z "${AUTH_KEY_FILE}" ]] || rm -f "${AUTH_KEY_FILE}"
+  rm -f "${MAGICDNS_SUPERVISOR_FAILURE_FILE}"
   [[ "${cleanup_status}" -eq 0 ]] || return "${cleanup_status}"
   return "${status}"
 }
@@ -101,6 +105,7 @@ if [[ "${ACCEPT_DNS}" == true ]]; then
 else
   tailscaled "${TAILSCALED_FLAGS[@]}" &
 fi
+TAILSCALED_PID=$!
 
 i=0
 while [[ $i -lt 12 ]]; do
@@ -108,6 +113,7 @@ while [[ $i -lt 12 ]]; do
     # bring up the tunnel
     tailscale --socket "$TAILSCALE_SOCKET" up --reset "${TAILSCALE_FLAGS[@]}"
     run_magicdns start-ingress
+
     run_magicdns guidance
 
     if [[ ${#TAILSCALE_SET_FLAGS[@]} -gt 0 ]]; then
@@ -121,9 +127,40 @@ while [[ $i -lt 12 ]]; do
       tailscale serve reset 2>/dev/null || true
     fi
 
-    # put Tailscale in foreground
-    fg
-    exit
+    if [[ "${ACCEPT_DNS}" == true ]]; then
+      resolver_names=(ingress egress)
+    else
+      resolver_names=(ingress)
+    fi
+    mkdir -p "${MAGICDNS_RUNTIME_DIR}"
+    rm -f "${MAGICDNS_SUPERVISOR_FAILURE_FILE}"
+    (
+      if ! run_magicdns supervise "${resolver_names[@]}"; then
+        : > "${MAGICDNS_SUPERVISOR_FAILURE_FILE}"
+        exit 1
+      fi
+    ) &
+    MAGICDNS_SUPERVISOR_PID=$!
+
+    while kill -0 "${TAILSCALED_PID}" 2>/dev/null; do
+      if [[ -e "${MAGICDNS_SUPERVISOR_FAILURE_FILE}" ]]; then
+        kill -TERM "${TAILSCALED_PID}" 2>/dev/null || true
+        wait "${TAILSCALED_PID}" 2>/dev/null || true
+        wait "${MAGICDNS_SUPERVISOR_PID}" 2>/dev/null || true
+        exit 1
+      fi
+      sleep 0.1
+    done
+    if wait "${TAILSCALED_PID}"; then
+      tailscaled_status=0
+    else
+      tailscaled_status=$?
+    fi
+    if kill -0 "${MAGICDNS_SUPERVISOR_PID}" 2>/dev/null; then
+      kill -TERM "${MAGICDNS_SUPERVISOR_PID}" 2>/dev/null || true
+      wait "${MAGICDNS_SUPERVISOR_PID}" 2>/dev/null || true
+    fi
+    exit "${tailscaled_status}"
   else
     (( i+=1 ))
     echo "tailscaled hasn't started yet, sleeping for 5 seconds..."

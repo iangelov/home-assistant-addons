@@ -143,13 +143,37 @@ cleanup() {
   return "${cleanup_status}"
 }
 
+supervise() {
+  local resolver pidfile pid
+  while :; do
+    for resolver in "$@"; do
+      case "${resolver}" in
+        ingress) pidfile="${INGRESS_PID}" ;;
+        egress) pidfile="${EGRESS_PID}" ;;
+        *) echo "Unknown MagicDNS resolver: ${resolver}" >&2; return 2 ;;
+      esac
+      if [[ ! -r "${pidfile}" ]]; then
+        echo "MagicDNS ${resolver} resolver exited unexpectedly" >&2
+        return 1
+      fi
+      pid=$(<"${pidfile}")
+      if ! kill -0 "${pid}" 2>/dev/null; then
+        echo "MagicDNS ${resolver} resolver exited unexpectedly" >&2
+        return 1
+      fi
+    done
+    sleep 1
+  done
+}
+
 case "${1:-}" in
   prepare-egress) prepare_egress ;;
   start-ingress) start_ingress ;;
   setup-drop) "${MAGICDNS_BRIDGE}" setup-drop ;;
   cleanup) cleanup ;;
+  supervise) shift; supervise "$@" ;;
   *)
-    printf 'Usage: %s {prepare-egress|start-ingress|setup-drop|cleanup}\n' "${0##*/}" >&2
+    printf 'Usage: %s {prepare-egress|start-ingress|setup-drop|cleanup|supervise}\n' "${0##*/}" >&2
     exit 2
     ;;
 esac

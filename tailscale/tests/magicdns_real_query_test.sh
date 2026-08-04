@@ -63,6 +63,14 @@ rtk podman run --rm --cap-add=NET_ADMIN \
     /usr/bin/dig @127.0.0.2 device.example.ts.net A +short | grep -Fx 100.64.0.9
     grep -Fq device.example.ts.net /test/quad.log
     PATH=/test/bin:$PATH MAGICDNS_RUNTIME_DIR=/test/runtime MAGICDNS_BRIDGE=magicdns-bridge ACCEPT_DNS=true bash /work/tailscale/files/magicdns-resolver.sh cleanup
+    : > /test/quad.log
+    PATH=/test/bin:$PATH MAGICDNS_RUNTIME_DIR=/test/runtime MAGICDNS_BRIDGE=magicdns-bridge ACCEPT_DNS=false bash /work/tailscale/files/magicdns-resolver.sh start-ingress
+    /usr/bin/dig @127.0.0.2 device.example.ts.net A +short | grep -Fx 100.64.0.9
+    grep -Fq device.example.ts.net /test/quad.log
+    : > /test/quad.log
+    /usr/bin/dig @127.0.0.2 ordinary.example A +short >/test/ordinary.example
+    ! grep -Fq ordinary.example /test/quad.log
+    PATH=/test/bin:$PATH MAGICDNS_RUNTIME_DIR=/test/runtime MAGICDNS_BRIDGE=magicdns-bridge ACCEPT_DNS=false bash /work/tailscale/files/magicdns-resolver.sh cleanup
   '
 
-printf '%s\n' 'PASS: real dnsmasq queries keep loop-break names off Quad100 and send tailnet names to it'
+printf '%s\n' 'PASS: real dnsmasq queries enforce the accept_dns=true and false DNS boundaries'

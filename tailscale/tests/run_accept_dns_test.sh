@@ -48,7 +48,7 @@ esac
 make_fake tailscaled '
 if [[ "${1-}" == "-cleanup" ]]; then exit 0; fi
 : > "${TAILSCALE_SOCKET}"
-sleep 0.01
+sleep "${FAKE_TAILSCALED_SLEEP:-0.01}"
 '
 # shellcheck disable=SC2016 # The generated fake expands variables at runtime.
 make_fake tailscale '
@@ -60,6 +60,14 @@ make_fake magicdns-resolver '
 printf "%s\\n" "$*" >> "${MAGICDNS_TEST_LOG}"
 if [[ "$1" == prepare-egress && "${FAKE_PREPARE_FAIL:-false}" == true ]]; then exit 73; fi
 if [[ "$1" == cleanup && "${FAKE_CLEANUP_FAIL:-false}" == true ]]; then exit 75; fi
+if [[ "$1" == supervise ]]; then
+  if [[ "${FAKE_RESOLVER_DELAYED_EXIT:-}" == ingress || "${FAKE_RESOLVER_DELAYED_EXIT:-}" == egress ]]; then
+    sleep 0.1
+    exit 76
+  fi
+  while :; do sleep 1; done
+fi
+exit 0
 '
 # shellcheck disable=SC2016 # The generated fake expands variables at runtime.
 make_fake unshare '
@@ -140,6 +148,32 @@ cleanup_status=$?
 set -e
 [[ "${cleanup_status}" -eq 1 ]] || { printf 'FAIL: expected propagated cleanup status 1, got %s\n' "${cleanup_status}" >&2; exit 1; }
 grep -Fx cleanup "${tmpdir}/magicdns-cleanup-failure.log"
+
+run_delayed_resolver_exit() {
+  local resolver=$1 status
+  : > "${tmpdir}/magicdns-delayed-${resolver}.log"
+  : > "${tmpdir}/socket/delayed-${resolver}.sock"
+  set +e
+  PATH="${tmpdir}/bin:${PATH}" \
+    TAILSCALE_SOCKET="${tmpdir}/socket/delayed-${resolver}.sock" \
+    MAGICDNS_RUNTIME_DIR="${tmpdir}/runtime-delayed-${resolver}" \
+    TAILSCALE_TEST_LOG="${tmpdir}/calls-delayed-${resolver}.log" \
+    MAGICDNS_RESOLVER="${tmpdir}/bin/magicdns-resolver" \
+    MAGICDNS_TEST_LOG="${tmpdir}/magicdns-delayed-${resolver}.log" \
+    UNSHARE_TEST_LOG="${tmpdir}/unshare-delayed-${resolver}.log" \
+    FAKE_ACCEPT_DNS=true FAKE_TAILSCALED_SLEEP=5 FAKE_RESOLVER_DELAYED_EXIT="${resolver}" \
+    timeout 7 bash "${run_script}" >/dev/null 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || { printf 'FAIL: expected %s resolver failure to stop the add-on, got %s\\n' "${resolver}" "${status}" >&2; exit 1; }
+  grep -Fx -- 'supervise ingress egress' "${tmpdir}/magicdns-delayed-${resolver}.log"
+  grep -Fx cleanup "${tmpdir}/magicdns-delayed-${resolver}.log"
+}
+
+# Production break caught: a resolver that exits after readiness goes unnoticed,
+# leaving the add-on up without a complete MagicDNS path or fail-safe teardown.
+run_delayed_resolver_exit ingress
+run_delayed_resolver_exit egress
 
 run_case true
 run_case false
