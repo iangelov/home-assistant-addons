@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# Portions adapted from hassio-addons/app-tailscale.
+# Copyright (c) Franck Nijhof. Licensed under the MIT License.
 
 # DNAT Home Assistant DNS queries for Tailscale Quad100 to the local ingress
 # resolver. This script deliberately only owns rules with all of these exact
@@ -13,7 +15,9 @@ readonly HASSIO_BRIDGE='hassio'
 readonly DNS_PORT='53'
 readonly MAGICDNS_RUNTIME_DIR="${MAGICDNS_RUNTIME_DIR:-/run/tailscale}"
 readonly ADDRESS_CACHE="${MAGICDNS_RUNTIME_DIR}/magicdns-bridge-addresses"
+readonly DROP_ADDRESS_CACHE="${MAGICDNS_RUNTIME_DIR}/magicdns-bridge-drop-addresses"
 TAILSCALE_SOCKET="${TAILSCALE_SOCKET:-/var/run/tailscale/tailscaled.sock}"
+RULE_TO_PORT="${DNS_PORT}"
 
 ha_dns_ipv4=''
 ha_dns_ipv6=''
@@ -31,20 +35,23 @@ lookup() {
   dig "${host}.local.hass.io" "${family}" +short | awk 'NF { print; exit }'
 }
 
-discover_addresses() {
+discover_ha_addresses() {
   ha_dns_ipv4=$(lookup dns A || true)
   ha_dns_ipv6=$(lookup dns AAAA || true)
   ha_supervisor_ipv4=$(lookup supervisor A || true)
   ha_supervisor_ipv6=$(lookup supervisor AAAA || true)
-  tailscale_ipv4=$(tailscale --socket "${TAILSCALE_SOCKET}" ip -4 || true)
-  tailscale_ipv6=$(tailscale --socket "${TAILSCALE_SOCKET}" ip -6 || true)
-
-  if [[ -z "${tailscale_ipv4}" && -z "${tailscale_ipv6}" ]]; then
-    log 'Unable to determine the local Tailscale address for the MagicDNS bridge' >&2
-    return 1
-  fi
   if [[ -z "${ha_dns_ipv4}${ha_dns_ipv6}${ha_supervisor_ipv4}${ha_supervisor_ipv6}" ]]; then
     log 'Unable to determine Home Assistant DNS or Supervisor addresses for the MagicDNS bridge' >&2
+    return 1
+  fi
+}
+
+discover_addresses() {
+  discover_ha_addresses
+  tailscale_ipv4=$(tailscale --socket "${TAILSCALE_SOCKET}" ip -4 || true)
+  tailscale_ipv6=$(tailscale --socket "${TAILSCALE_SOCKET}" ip -6 || true)
+  if [[ -z "${tailscale_ipv4}" && -z "${tailscale_ipv6}" ]]; then
+    log 'Unable to determine the local Tailscale address for the MagicDNS bridge' >&2
     return 1
   fi
 }
@@ -66,15 +73,30 @@ load_cached_addresses() {
   } < "${ADDRESS_CACHE}"
 }
 
+save_drop_addresses() {
+  mkdir -p "${MAGICDNS_RUNTIME_DIR}"
+  printf '%s\n' "${ha_dns_ipv4}" "${ha_dns_ipv6}" "${ha_supervisor_ipv4}" "${ha_supervisor_ipv6}" > "${DROP_ADDRESS_CACHE}"
+}
+
+load_cached_drop_addresses() {
+  [[ -r "${DROP_ADDRESS_CACHE}" ]] || return 1
+  {
+    IFS= read -r ha_dns_ipv4
+    IFS= read -r ha_dns_ipv6
+    IFS= read -r ha_supervisor_ipv4
+    IFS= read -r ha_supervisor_ipv6
+  } < "${DROP_ADDRESS_CACHE}"
+}
+
 rule_exists() {
   local tool=$1 source=$2 destination=$3 target=$4 protocol=$5
-  "${tool}" -t nat -C PREROUTING -s "${source}" -d "${destination}" -i "${HASSIO_BRIDGE}" -p "${protocol}" --dport "${DNS_PORT}" -j DNAT --to-destination "${target}:${DNS_PORT}"
+  "${tool}" -t nat -C PREROUTING -s "${source}" -d "${destination}" -i "${HASSIO_BRIDGE}" -p "${protocol}" --dport "${DNS_PORT}" -j DNAT --to-destination "${target}:${RULE_TO_PORT}"
 }
 
 remove_rule() {
   local tool=$1 source=$2 destination=$3 target=$4 protocol=$5
   if rule_exists "${tool}" "${source}" "${destination}" "${target}" "${protocol}"; then
-    "${tool}" -t nat -D PREROUTING -s "${source}" -d "${destination}" -i "${HASSIO_BRIDGE}" -p "${protocol}" --dport "${DNS_PORT}" -j DNAT --to-destination "${target}:${DNS_PORT}"
+    "${tool}" -t nat -D PREROUTING -s "${source}" -d "${destination}" -i "${HASSIO_BRIDGE}" -p "${protocol}" --dport "${DNS_PORT}" -j DNAT --to-destination "${target}:${RULE_TO_PORT}"
   fi
 }
 
@@ -83,7 +105,7 @@ install_rule() {
   if rule_exists "${tool}" "${source}" "${destination}" "${target}" "${protocol}"; then
     return 0
   fi
-  "${tool}" -t nat -A PREROUTING -s "${source}" -d "${destination}" -i "${HASSIO_BRIDGE}" -p "${protocol}" --dport "${DNS_PORT}" -j DNAT --to-destination "${target}:${DNS_PORT}"
+  "${tool}" -t nat -A PREROUTING -s "${source}" -d "${destination}" -i "${HASSIO_BRIDGE}" -p "${protocol}" --dport "${DNS_PORT}" -j DNAT --to-destination "${target}:${RULE_TO_PORT}"
 }
 
 with_family_rules() {
@@ -99,15 +121,39 @@ with_family_rules() {
 }
 
 cleanup() {
-  if ! discover_addresses; then
-    load_cached_addresses || return 0
+  RULE_TO_PORT="${DNS_PORT}"
+  if ! load_cached_addresses; then
+    discover_addresses || return 0
   fi
   with_family_rules remove iptables "${MAGIC_DNS_IPV4}" "${tailscale_ipv4}" "${ha_dns_ipv4}" "${ha_supervisor_ipv4}"
   with_family_rules remove ip6tables "${MAGIC_DNS_IPV6}" "[${tailscale_ipv6}]" "${ha_dns_ipv6}" "${ha_supervisor_ipv6}"
   rm -f "${ADDRESS_CACHE}"
 }
 
+setup_drop() {
+  discover_ha_addresses
+  save_drop_addresses
+  RULE_TO_PORT=0
+  if ! with_family_rules install iptables "${MAGIC_DNS_IPV4}" '127.0.0.1' "${ha_dns_ipv4}" "${ha_supervisor_ipv4}" || \
+    ! with_family_rules install ip6tables "${MAGIC_DNS_IPV6}" '[::1]' "${ha_dns_ipv6}" "${ha_supervisor_ipv6}"; then
+    log 'MagicDNS temporary DROP setup failed; removing partial state' >&2
+    remove_drop || true
+    return 1
+  fi
+}
+
+remove_drop() {
+  if ! load_cached_drop_addresses; then
+    discover_ha_addresses || return 0
+  fi
+  RULE_TO_PORT=0
+  with_family_rules remove iptables "${MAGIC_DNS_IPV4}" '127.0.0.1' "${ha_dns_ipv4}" "${ha_supervisor_ipv4}"
+  with_family_rules remove ip6tables "${MAGIC_DNS_IPV6}" '[::1]' "${ha_dns_ipv6}" "${ha_supervisor_ipv6}"
+  rm -f "${DROP_ADDRESS_CACHE}"
+}
+
 setup() {
+  RULE_TO_PORT="${DNS_PORT}"
   discover_addresses
   save_addresses
   if ! with_family_rules install iptables "${MAGIC_DNS_IPV4}" "${tailscale_ipv4}" "${ha_dns_ipv4}" "${ha_supervisor_ipv4}" || \
@@ -116,6 +162,7 @@ setup() {
     cleanup || true
     return 1
   fi
+  remove_drop
 }
 
 guidance() {
@@ -132,9 +179,11 @@ guidance() {
 case "${1:-}" in
   setup) setup ;;
   cleanup) cleanup ;;
+  setup-drop) setup_drop ;;
+  remove-drop) remove_drop ;;
   guidance) guidance ;;
   *)
-    printf 'Usage: %s {setup|cleanup|guidance}\n' "${0##*/}" >&2
+    printf 'Usage: %s {setup|cleanup|setup-drop|remove-drop|guidance}\n' "${0##*/}" >&2
     exit 2
     ;;
 esac

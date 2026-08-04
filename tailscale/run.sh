@@ -81,10 +81,11 @@ if bashio::config.true 'webclient'; then
   TAILSCALE_SET_FLAGS+=('--webclient=true')
 fi
 
+MAGICDNS_ACTIVE=true
+run_magicdns setup-drop
 if [[ "${ACCEPT_DNS}" == true ]]; then
   run_magicdns prepare-egress
 fi
-MAGICDNS_ACTIVE=true
 
 tailscaled -cleanup "${TAILSCALED_FLAGS[@]}"
 if [[ "${ACCEPT_DNS}" == true ]]; then
