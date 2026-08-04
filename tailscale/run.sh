@@ -3,11 +3,62 @@
 
 set -Eeum -o pipefail
 
-TAILSCALE_SOCKET="/var/run/tailscale/tailscaled.sock"
+TAILSCALE_SOCKET="${TAILSCALE_SOCKET:-/var/run/tailscale/tailscaled.sock}"
+MAGICDNS_RESOLVER="${MAGICDNS_RESOLVER:-/magicdns-resolver.sh}"
+MAGICDNS_RUNTIME_DIR="${MAGICDNS_RUNTIME_DIR:-/run/tailscale}"
 TAILSCALE_FLAGS=()
 TAILSCALE_SET_FLAGS=()
 TAILSCALED_FLAGS=("--statedir" "/data" "--socket" "${TAILSCALE_SOCKET}")
 PROXY_SERVE_HA=false
+ACCEPT_DNS=false
+MAGICDNS_ACTIVE=false
+AUTH_KEY_FILE=''
+TAILSCALED_PID=''
+MAGICDNS_SUPERVISOR_PID=''
+MAGICDNS_SUPERVISOR_FAILURE_FILE="${MAGICDNS_RUNTIME_DIR}/magicdns-supervisor.failed"
+
+run_magicdns() {
+  ACCEPT_DNS="${ACCEPT_DNS}" MAGICDNS_RUNTIME_DIR="${MAGICDNS_RUNTIME_DIR}" "${MAGICDNS_RESOLVER}" "$@"
+}
+
+# shellcheck disable=SC2329 # Invoked through the EXIT trap below.
+cleanup() {
+  local status=$?
+  local cleanup_status=0
+  if [[ "${MAGICDNS_ACTIVE}" == true ]]; then
+    if ! run_magicdns cleanup; then
+      cleanup_status=1
+    fi
+  fi
+  [[ -z "${AUTH_KEY_FILE}" ]] || rm -f "${AUTH_KEY_FILE}"
+  rm -f "${MAGICDNS_SUPERVISOR_FAILURE_FILE}"
+  [[ "${cleanup_status}" -eq 0 ]] || return "${cleanup_status}"
+  return "${status}"
+}
+trap cleanup EXIT
+
+forward_signal() {
+  local signal=$1 exit_status=$2
+  trap - TERM INT
+  if [[ -n "${TAILSCALED_PID}" ]]; then
+    kill -s "${signal}" "${TAILSCALED_PID}" 2>/dev/null || true
+    wait "${TAILSCALED_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${MAGICDNS_SUPERVISOR_PID}" ]]; then
+    kill -TERM "${MAGICDNS_SUPERVISOR_PID}" 2>/dev/null || true
+    wait "${MAGICDNS_SUPERVISOR_PID}" 2>/dev/null || true
+  fi
+  exit "${exit_status}"
+}
+trap 'forward_signal TERM 143' TERM
+trap 'forward_signal INT 130' INT
+
+if bashio::config.true 'accept_dns'; then
+  ACCEPT_DNS=true
+  TAILSCALE_FLAGS+=("--accept-dns=true")
+else
+  TAILSCALE_FLAGS+=("--accept-dns=false")
+fi
 
 if bashio::config.true 'advertise_exit_node'; then
   TAILSCALE_FLAGS+=("--advertise-exit-node")
@@ -30,7 +81,6 @@ fi
 if bashio::config.has_value 'auth_key'; then
   # Pass the auth key via a file so it never appears in /proc/<pid>/cmdline.
   AUTH_KEY_FILE=$(mktemp)
-  trap 'rm -f "$AUTH_KEY_FILE"' EXIT
   printf '%s' "$(bashio::config 'auth_key')" > "$AUTH_KEY_FILE"
   TAILSCALE_FLAGS+=('--authkey' "file:${AUTH_KEY_FILE}")
 fi
@@ -55,14 +105,32 @@ if bashio::config.true 'webclient'; then
   TAILSCALE_SET_FLAGS+=('--webclient=true')
 fi
 
+MAGICDNS_ACTIVE=true
+run_magicdns setup-drop
+if [[ "${ACCEPT_DNS}" == true ]]; then
+  run_magicdns prepare-egress
+fi
+
 tailscaled -cleanup "${TAILSCALED_FLAGS[@]}"
-tailscaled "${TAILSCALED_FLAGS[@]}" &
+if [[ "${ACCEPT_DNS}" == true ]]; then
+  # Only tailscaled receives the private resolver view. This prevents Quad100
+  # from recursing through Home Assistant DNS while preserving host DNS.
+  # shellcheck disable=SC2016 # $1 and $@ expand in the isolated shell.
+  unshare -m bash -c 'mount --bind "$1" /etc/resolv.conf; shift; exec "$@"' _ \
+    "${MAGICDNS_RUNTIME_DIR}/tailscaled-resolv.conf" tailscaled "${TAILSCALED_FLAGS[@]}" &
+else
+  tailscaled "${TAILSCALED_FLAGS[@]}" &
+fi
+TAILSCALED_PID=$!
 
 i=0
 while [[ $i -lt 12 ]]; do
   if [[ -e "$TAILSCALE_SOCKET" ]]; then
     # bring up the tunnel
     tailscale --socket "$TAILSCALE_SOCKET" up --reset "${TAILSCALE_FLAGS[@]}"
+    run_magicdns start-ingress
+
+    run_magicdns guidance
 
     if [[ ${#TAILSCALE_SET_FLAGS[@]} -gt 0 ]]; then
       tailscale set "${TAILSCALE_SET_FLAGS[@]}"
@@ -75,9 +143,40 @@ while [[ $i -lt 12 ]]; do
       tailscale serve reset 2>/dev/null || true
     fi
 
-    # put Tailscale in foreground
-    fg
-    exit
+    if [[ "${ACCEPT_DNS}" == true ]]; then
+      resolver_names=(ingress egress)
+    else
+      resolver_names=(ingress)
+    fi
+    mkdir -p "${MAGICDNS_RUNTIME_DIR}"
+    rm -f "${MAGICDNS_SUPERVISOR_FAILURE_FILE}"
+    (
+      if ! run_magicdns supervise "${resolver_names[@]}"; then
+        : > "${MAGICDNS_SUPERVISOR_FAILURE_FILE}"
+        exit 1
+      fi
+    ) &
+    MAGICDNS_SUPERVISOR_PID=$!
+
+    while kill -0 "${TAILSCALED_PID}" 2>/dev/null; do
+      if [[ -e "${MAGICDNS_SUPERVISOR_FAILURE_FILE}" ]]; then
+        kill -TERM "${TAILSCALED_PID}" 2>/dev/null || true
+        wait "${TAILSCALED_PID}" 2>/dev/null || true
+        wait "${MAGICDNS_SUPERVISOR_PID}" 2>/dev/null || true
+        exit 1
+      fi
+      sleep 0.1
+    done
+    if wait "${TAILSCALED_PID}"; then
+      tailscaled_status=0
+    else
+      tailscaled_status=$?
+    fi
+    if kill -0 "${MAGICDNS_SUPERVISOR_PID}" 2>/dev/null; then
+      kill -TERM "${MAGICDNS_SUPERVISOR_PID}" 2>/dev/null || true
+      wait "${MAGICDNS_SUPERVISOR_PID}" 2>/dev/null || true
+    fi
+    exit "${tailscaled_status}"
   else
     (( i+=1 ))
     echo "tailscaled hasn't started yet, sleeping for 5 seconds..."

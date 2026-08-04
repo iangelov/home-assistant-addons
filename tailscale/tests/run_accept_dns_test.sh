@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+set -Eeuo pipefail
+
+# Production break caught: tailscale up --reset omits or reverses --accept-dns,
+# leaving DNS behavior dependent on the previous daemon state.
+
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+run_script="${repo_root}/tailscale/run.sh"
+tmpdir=$(mktemp -d)
+cleanup_test() {
+  local pidfile pid
+  for pidfile in "${tmpdir}"/tailscaled-*.pid; do
+    [[ -r "${pidfile}" ]] || continue
+    pid=$(<"${pidfile}")
+    kill -TERM "${pid}" 2>/dev/null || true
+  done
+  rm -rf "${tmpdir}"
+}
+trap cleanup_test EXIT
+
+mkdir -p "${tmpdir}/bin" "${tmpdir}/socket"
+
+make_fake() {
+  local name=$1
+  shift
+  printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' "$@" > "${tmpdir}/bin/${name}"
+  chmod +x "${tmpdir}/bin/${name}"
+}
+
+# shellcheck disable=SC2016 # The generated fake expands variables at runtime.
+make_fake 'bashio::config.true' '
+if [[ "${1}" == "accept_dns" && "${FAKE_ACCEPT_DNS}" == true ]]; then exit 0; fi
+if [[ "${FAKE_EXISTING_OPTIONS:-false}" == true ]]; then
+  case "${1}" in
+    advertise_exit_node|advertise_connector|proxy_serve_ha|webclient) exit 0 ;;
+  esac
+fi
+exit 1
+'
+# shellcheck disable=SC2016 # The generated fake expands variables at runtime.
+make_fake 'bashio::config.has_value' '
+[[ "${FAKE_EXISTING_OPTIONS:-false}" == true ]] || exit 1
+case "${1}" in advertised_routes|tags|hostname|port) exit 0 ;; esac
+exit 1
+'
+# shellcheck disable=SC2016 # The generated fake expands variables at runtime.
+make_fake 'bashio::config' '
+case "${1}" in
+  advertised_routes) echo 192.0.2.0/24 ;;
+  tags) echo tag:existing ;;
+  hostname) echo existing-host ;;
+  port) echo 41642 ;;
+esac
+'
+# shellcheck disable=SC2016 # The generated fake expands variables at runtime.
+make_fake tailscaled '
+if [[ "${1-}" == "-cleanup" ]]; then exit 0; fi
+: > "${TAILSCALE_SOCKET}"
+: "${TAILSCALED_PID_LOG:=/dev/null}"
+: "${TAILSCALED_SIGNAL_LOG:=/dev/null}"
+printf "%s\\n" "$$" > "${TAILSCALED_PID_LOG}"
+on_signal() { printf "%s\\n" "$1" >> "${TAILSCALED_SIGNAL_LOG}"; exit 0; }
+trap "on_signal TERM" TERM
+trap "on_signal INT" INT
+if [[ "${FAKE_TAILSCALED_FOREVER:-false}" == true ]]; then
+  while :; do sleep 0.1; done
+fi
+sleep "${FAKE_TAILSCALED_SLEEP:-0.01}"
+'
+# shellcheck disable=SC2016 # The generated fake expands variables at runtime.
+make_fake tailscale '
+printf "%s\\n" "$*" >> "${TAILSCALE_TEST_LOG}"
+exit 0
+'
+# shellcheck disable=SC2016 # The generated fake expands variables at runtime.
+make_fake magicdns-resolver '
+printf "%s\\n" "$*" >> "${MAGICDNS_TEST_LOG}"
+if [[ "$1" == prepare-egress && "${FAKE_PREPARE_FAIL:-false}" == true ]]; then exit 73; fi
+if [[ "$1" == cleanup && "${FAKE_CLEANUP_FAIL:-false}" == true ]]; then exit 75; fi
+if [[ "$1" == supervise ]]; then
+  if [[ "${FAKE_RESOLVER_DELAYED_EXIT:-}" == ingress || "${FAKE_RESOLVER_DELAYED_EXIT:-}" == egress ]]; then
+    sleep 0.1
+    exit 76
+  fi
+  while :; do sleep 1; done
+fi
+exit 0
+'
+# shellcheck disable=SC2016 # The generated fake expands variables at runtime.
+make_fake unshare '
+printf "%s\\n" "$*" >> "${UNSHARE_TEST_LOG}"
+[[ "${FAKE_UNSHARE_FAIL:-false}" == true ]] && exit 74
+"${@:7}"
+'
+
+run_case() {
+  local accept_dns=$1
+  : > "${tmpdir}/calls-${accept_dns}.log"
+  PATH="${tmpdir}/bin:${PATH}" \
+    TAILSCALE_SOCKET="${tmpdir}/socket/tailscaled.sock" \
+    TAILSCALE_TEST_LOG="${tmpdir}/calls-${accept_dns}.log" \
+    MAGICDNS_RESOLVER="${tmpdir}/bin/magicdns-resolver" \
+    MAGICDNS_TEST_LOG="${tmpdir}/magicdns-${accept_dns}.log" \
+    UNSHARE_TEST_LOG="${tmpdir}/unshare-${accept_dns}.log" \
+    FAKE_ACCEPT_DNS="${accept_dns}" \
+    timeout 7 bash "${run_script}" >/dev/null 2>&1 || true
+  if ! grep -Fx -- "--socket ${tmpdir}/socket/tailscaled.sock up --reset --accept-dns=${accept_dns}" \
+    "${tmpdir}/calls-${accept_dns}.log"; then
+    printf 'FAIL: expected deterministic --accept-dns=%s tailscale up invocation\n' "${accept_dns}" >&2
+    return 1
+  fi
+  if [[ "${accept_dns}" == true ]]; then
+    grep -Fx prepare-egress "${tmpdir}/magicdns-${accept_dns}.log"
+    grep -Fx -- "-m bash -c mount --bind \"\$1\" /etc/resolv.conf; shift; exec \"\$@\" _ /run/tailscale/tailscaled-resolv.conf tailscaled --statedir /data --socket ${tmpdir}/socket/tailscaled.sock" "${tmpdir}/unshare-${accept_dns}.log"
+  elif grep -Fxq prepare-egress "${tmpdir}/magicdns-${accept_dns}.log"; then
+    echo 'FAIL: disabled DNS acceptance started the egress loop-prevention resolver' >&2
+    return 1
+  fi
+  grep -Fx start-ingress "${tmpdir}/magicdns-${accept_dns}.log"
+  grep -Fx cleanup "${tmpdir}/magicdns-${accept_dns}.log"
+}
+
+# Production break caught: a prepare-egress failure occurs before ownership is
+# marked, so the EXIT trap fails to remove partially created resolver state.
+: > "${tmpdir}/magicdns-failure.log"
+PATH="${tmpdir}/bin:${PATH}" \
+  TAILSCALE_SOCKET="${tmpdir}/socket/failed.sock" \
+  TAILSCALE_TEST_LOG="${tmpdir}/calls-failure.log" \
+  MAGICDNS_RESOLVER="${tmpdir}/bin/magicdns-resolver" \
+  MAGICDNS_TEST_LOG="${tmpdir}/magicdns-failure.log" \
+  UNSHARE_TEST_LOG="${tmpdir}/unshare-failure.log" \
+  FAKE_ACCEPT_DNS=true FAKE_PREPARE_FAIL=true \
+  bash "${run_script}" >/dev/null 2>&1 || true
+grep -Fx prepare-egress "${tmpdir}/magicdns-failure.log"
+grep -Fx cleanup "${tmpdir}/magicdns-failure.log"
+
+# Characterization of the namespace boundary: unshare must receive the exact
+# mount/exec contract, and its immediate failure must not run tailscale up.
+: > "${tmpdir}/magicdns-unshare-failure.log"
+PATH="${tmpdir}/bin:${PATH}" \
+  TAILSCALE_SOCKET="${tmpdir}/socket/unshare-failed.sock" \
+  TAILSCALE_TEST_LOG="${tmpdir}/calls-unshare-failure.log" \
+  MAGICDNS_RESOLVER="${tmpdir}/bin/magicdns-resolver" \
+  MAGICDNS_TEST_LOG="${tmpdir}/magicdns-unshare-failure.log" \
+  UNSHARE_TEST_LOG="${tmpdir}/unshare-failure.log" \
+  FAKE_ACCEPT_DNS=true FAKE_UNSHARE_FAIL=true \
+  timeout 2 bash "${run_script}" >/dev/null 2>&1 || true
+grep -Fx -- "-m bash -c mount --bind \"\$1\" /etc/resolv.conf; shift; exec \"\$@\" _ /run/tailscale/tailscaled-resolv.conf tailscaled --statedir /data --socket ${tmpdir}/socket/unshare-failed.sock" "${tmpdir}/unshare-failure.log"
+[[ ! -s "${tmpdir}/calls-unshare-failure.log" ]] || { echo 'FAIL: tailscale up ran after unshare failed' >&2; exit 1; }
+grep -Fx cleanup "${tmpdir}/magicdns-unshare-failure.log"
+
+# Production break caught: the real run.sh EXIT trap ignores a resolver
+# cleanup failure, so process shutdown can hide stale forwarding cleanup.
+: > "${tmpdir}/magicdns-cleanup-failure.log"
+set +e
+PATH="${tmpdir}/bin:${PATH}" \
+  TAILSCALE_SOCKET="${tmpdir}/socket/cleanup-failed.sock" \
+  TAILSCALE_TEST_LOG="${tmpdir}/calls-cleanup-failure.log" \
+  MAGICDNS_RESOLVER="${tmpdir}/bin/magicdns-resolver" \
+  MAGICDNS_TEST_LOG="${tmpdir}/magicdns-cleanup-failure.log" \
+  UNSHARE_TEST_LOG="${tmpdir}/unshare-cleanup-failure.log" \
+  FAKE_ACCEPT_DNS=false FAKE_CLEANUP_FAIL=true \
+  timeout 7 bash "${run_script}" >/dev/null 2>&1
+cleanup_status=$?
+set -e
+[[ "${cleanup_status}" -eq 1 ]] || { printf 'FAIL: expected propagated cleanup status 1, got %s\n' "${cleanup_status}" >&2; exit 1; }
+grep -Fx cleanup "${tmpdir}/magicdns-cleanup-failure.log"
+
+run_delayed_resolver_exit() {
+  local resolver=$1 status
+  : > "${tmpdir}/magicdns-delayed-${resolver}.log"
+  : > "${tmpdir}/socket/delayed-${resolver}.sock"
+  set +e
+  PATH="${tmpdir}/bin:${PATH}" \
+    TAILSCALE_SOCKET="${tmpdir}/socket/delayed-${resolver}.sock" \
+    MAGICDNS_RUNTIME_DIR="${tmpdir}/runtime-delayed-${resolver}" \
+    TAILSCALE_TEST_LOG="${tmpdir}/calls-delayed-${resolver}.log" \
+    MAGICDNS_RESOLVER="${tmpdir}/bin/magicdns-resolver" \
+    MAGICDNS_TEST_LOG="${tmpdir}/magicdns-delayed-${resolver}.log" \
+    UNSHARE_TEST_LOG="${tmpdir}/unshare-delayed-${resolver}.log" \
+    FAKE_ACCEPT_DNS=true FAKE_TAILSCALED_SLEEP=5 FAKE_RESOLVER_DELAYED_EXIT="${resolver}" \
+    timeout 7 bash "${run_script}" >/dev/null 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || { printf 'FAIL: expected %s resolver failure to stop the add-on, got %s\\n' "${resolver}" "${status}" >&2; exit 1; }
+  grep -Fx -- 'supervise ingress egress' "${tmpdir}/magicdns-delayed-${resolver}.log"
+  grep -Fx cleanup "${tmpdir}/magicdns-delayed-${resolver}.log"
+}
+
+# Production break caught: a resolver that exits after readiness goes unnoticed,
+# leaving the add-on up without a complete MagicDNS path or fail-safe teardown.
+run_delayed_resolver_exit ingress
+run_delayed_resolver_exit egress
+
+run_signal_case() {
+  local signal=$1 expected_status=$2 timeout_pid child_pid status
+  : > "${tmpdir}/socket/signal-${signal}.sock"
+  : > "${tmpdir}/magicdns-signal-${signal}.log"
+  PATH="${tmpdir}/bin:${PATH}" \
+    TAILSCALE_SOCKET="${tmpdir}/socket/signal-${signal}.sock" \
+    MAGICDNS_RUNTIME_DIR="${tmpdir}/runtime-signal-${signal}" \
+    TAILSCALE_TEST_LOG="${tmpdir}/calls-signal-${signal}.log" \
+    MAGICDNS_RESOLVER="${tmpdir}/bin/magicdns-resolver" \
+    MAGICDNS_TEST_LOG="${tmpdir}/magicdns-signal-${signal}.log" \
+    UNSHARE_TEST_LOG="${tmpdir}/unshare-signal-${signal}.log" \
+    TAILSCALED_PID_LOG="${tmpdir}/tailscaled-${signal}.pid" \
+    TAILSCALED_SIGNAL_LOG="${tmpdir}/tailscaled-${signal}.signals" \
+    FAKE_ACCEPT_DNS=false FAKE_TAILSCALED_FOREVER=true \
+    timeout --signal="${signal}" --preserve-status 2 bash "${run_script}" &
+  timeout_pid=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [[ -s "${tmpdir}/tailscaled-${signal}.pid" ]] && break
+    sleep 0.1
+  done
+  [[ -s "${tmpdir}/tailscaled-${signal}.pid" ]] || { echo "FAIL: ${signal} case did not start tailscaled" >&2; exit 1; }
+  child_pid=$(<"${tmpdir}/tailscaled-${signal}.pid")
+  set +e
+  wait "${timeout_pid}"
+  status=$?
+  set -e
+  [[ "${status}" -eq "${expected_status}" ]] || { printf 'FAIL: expected %s exit %s, got %s\\n' "${signal}" "${expected_status}" "${status}" >&2; exit 1; }
+  grep -Fx "${signal}" "${tmpdir}/tailscaled-${signal}.signals"
+  grep -Fx cleanup "${tmpdir}/magicdns-signal-${signal}.log"
+  ! kill -0 "${child_pid}" 2>/dev/null || { echo "FAIL: ${signal} left tailscaled running" >&2; exit 1; }
+}
+
+# Production break caught: after tailscaled became a background child, an
+# add-on TERM/INT could exit the parent and leave the daemon or resolvers live.
+run_signal_case TERM 143
+run_signal_case INT 130
+
+run_case true
+run_case false
+
+# Characterization: the networking additions must not change existing options.
+: > "${tmpdir}/calls-existing-options.log"
+PATH="${tmpdir}/bin:${PATH}" \
+  TAILSCALE_SOCKET="${tmpdir}/socket/existing-options.sock" \
+  TAILSCALE_TEST_LOG="${tmpdir}/calls-existing-options.log" \
+  MAGICDNS_RESOLVER="${tmpdir}/bin/magicdns-resolver" \
+  MAGICDNS_TEST_LOG="${tmpdir}/magicdns-existing-options.log" \
+  UNSHARE_TEST_LOG="${tmpdir}/unshare-existing-options.log" \
+  FAKE_ACCEPT_DNS=false FAKE_EXISTING_OPTIONS=true \
+  timeout 7 bash "${run_script}" >/dev/null 2>&1 || true
+grep -Fx -- "--socket ${tmpdir}/socket/existing-options.sock up --reset --accept-dns=false --advertise-exit-node --advertise-connector --advertise-routes 192.0.2.0/24 --advertise-tags tag:existing --hostname existing-host --port 41642" "${tmpdir}/calls-existing-options.log"
+grep -Fx -- 'set --webclient=true' "${tmpdir}/calls-existing-options.log"
+grep -Fx -- 'serve --bg --https 443 http://localhost:8123' "${tmpdir}/calls-existing-options.log"
+
+printf '%s\n' 'PASS: accept_dns is applied deterministically'
