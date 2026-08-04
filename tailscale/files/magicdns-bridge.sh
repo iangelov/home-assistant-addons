@@ -18,6 +18,7 @@ readonly ADDRESS_CACHE="${MAGICDNS_RUNTIME_DIR}/magicdns-bridge-addresses"
 readonly DROP_ADDRESS_CACHE="${MAGICDNS_RUNTIME_DIR}/magicdns-bridge-drop-addresses"
 TAILSCALE_SOCKET="${TAILSCALE_SOCKET:-/var/run/tailscale/tailscaled.sock}"
 RULE_TO_PORT="${DNS_PORT}"
+RULE_ACTION='A'
 
 ha_dns_ipv4=''
 ha_dns_ipv6=''
@@ -105,7 +106,7 @@ install_rule() {
   if rule_exists "${tool}" "${source}" "${destination}" "${target}" "${protocol}"; then
     return 0
   fi
-  "${tool}" -t nat -A PREROUTING -s "${source}" -d "${destination}" -i "${HASSIO_BRIDGE}" -p "${protocol}" --dport "${DNS_PORT}" -j DNAT --to-destination "${target}:${RULE_TO_PORT}"
+  "${tool}" -t nat "-${RULE_ACTION}" PREROUTING -s "${source}" -d "${destination}" -i "${HASSIO_BRIDGE}" -p "${protocol}" --dport "${DNS_PORT}" -j DNAT --to-destination "${target}:${RULE_TO_PORT}"
 }
 
 with_family_rules() {
@@ -122,11 +123,15 @@ with_family_rules() {
 
 cleanup() {
   RULE_TO_PORT="${DNS_PORT}"
+  RULE_ACTION='A'
   if ! load_cached_addresses; then
     discover_addresses || return 0
   fi
-  with_family_rules remove iptables "${MAGIC_DNS_IPV4}" "${tailscale_ipv4}" "${ha_dns_ipv4}" "${ha_supervisor_ipv4}"
-  with_family_rules remove ip6tables "${MAGIC_DNS_IPV6}" "[${tailscale_ipv6}]" "${ha_dns_ipv6}" "${ha_supervisor_ipv6}"
+  if ! with_family_rules remove iptables "${MAGIC_DNS_IPV4}" "${tailscale_ipv4}" "${ha_dns_ipv4}" "${ha_supervisor_ipv4}" || \
+    ! with_family_rules remove ip6tables "${MAGIC_DNS_IPV6}" "[${tailscale_ipv6}]" "${ha_dns_ipv6}" "${ha_supervisor_ipv6}"; then
+    log 'MagicDNS forwarding cleanup failed; retaining temporary protection' >&2
+    return 1
+  fi
   rm -f "${ADDRESS_CACHE}"
 }
 
@@ -134,6 +139,7 @@ setup_drop() {
   discover_ha_addresses
   save_drop_addresses
   RULE_TO_PORT=0
+  RULE_ACTION='I'
   if ! with_family_rules install iptables "${MAGIC_DNS_IPV4}" '127.0.0.1' "${ha_dns_ipv4}" "${ha_supervisor_ipv4}" || \
     ! with_family_rules install ip6tables "${MAGIC_DNS_IPV6}" '[::1]' "${ha_dns_ipv6}" "${ha_supervisor_ipv6}"; then
     log 'MagicDNS temporary DROP setup failed; removing partial state' >&2
@@ -147,6 +153,7 @@ remove_drop() {
     discover_ha_addresses || return 0
   fi
   RULE_TO_PORT=0
+  RULE_ACTION='A'
   with_family_rules remove iptables "${MAGIC_DNS_IPV4}" '127.0.0.1' "${ha_dns_ipv4}" "${ha_supervisor_ipv4}"
   with_family_rules remove ip6tables "${MAGIC_DNS_IPV6}" '[::1]' "${ha_dns_ipv6}" "${ha_supervisor_ipv6}"
   rm -f "${DROP_ADDRESS_CACHE}"
@@ -154,6 +161,7 @@ remove_drop() {
 
 setup() {
   RULE_TO_PORT="${DNS_PORT}"
+  RULE_ACTION='A'
   discover_addresses
   save_addresses
   if ! with_family_rules install iptables "${MAGIC_DNS_IPV4}" "${tailscale_ipv4}" "${ha_dns_ipv4}" "${ha_supervisor_ipv4}" || \

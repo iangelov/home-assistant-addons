@@ -50,7 +50,13 @@ case " $args " in
     fi
     printf "%s\\n" "$args" >> "$state"
     ;;
+  *" -I "*)
+    insert=${args/ -I / -A }
+    { printf "%s\\n" "$insert"; cat "$state"; } > "${state}.next"
+    mv "${state}.next" "$state"
+    ;;
   *" -D "*)
+    [[ "${FAKE_FAIL_DELETE:-false}" == true ]] && exit 45
     delete=${args/ -D / -A }
     grep -Fvx -- "$delete" "$state" > "${state}.next" || true
     mv "${state}.next" "$state"
@@ -105,6 +111,13 @@ run_bridge setup-drop
 assert_rule_count 8 "${tmpdir}/state/iptables"
 assert_rule_count 8 "${tmpdir}/state/ip6tables"
 assert_contains '-s 172.30.32.3 -d 100.100.100.100 -i hassio -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:0' "${tmpdir}/state/iptables"
+# Production break caught: temporary protection appended after an existing
+# forwarding rule cannot prevent Quad100 traffic from reaching a stopped DNS.
+first_ipv4_rule=$(head -n 1 "${tmpdir}/state/iptables")
+[[ "${first_ipv4_rule}" == *'--to-destination 127.0.0.1:0'* ]] || {
+  echo 'FAIL: temporary IPv4 deny rule does not take precedence' >&2
+  exit 1
+}
 run_bridge setup
 assert_rule_count 4 "${tmpdir}/state/iptables"
 assert_rule_count 4 "${tmpdir}/state/ip6tables"
@@ -129,5 +142,19 @@ if PATH="${tmpdir}/bin:${PATH}" FAKE_NAT_STATE="${tmpdir}/state" FAKE_FAIL_ADD_A
 fi
 grep -Fx 'UNRELATED -t nat -A PREROUTING -d 192.0.2.9 -j DNAT --to-destination 192.0.2.10' "${tmpdir}/state/iptables"
 assert_rule_count 0 "${tmpdir}/state/iptables"
+
+# Production break caught: a forwarding deletion failure must leave the
+# precedence deny rule installed, rather than exposing stale forwarding.
+run_bridge setup
+run_bridge setup-drop
+if PATH="${tmpdir}/bin:${PATH}" FAKE_NAT_STATE="${tmpdir}/state" FAKE_FAIL_DELETE=true MAGICDNS_RUNTIME_DIR="${tmpdir}/runtime" TAILSCALE_SOCKET="${tmpdir}/tailscaled.sock" bash "${bridge_script}" cleanup; then
+  echo 'FAIL: cleanup unexpectedly succeeded when forwarding deletion failed' >&2
+  exit 1
+fi
+first_ipv4_rule=$(head -n 1 "${tmpdir}/state/iptables")
+[[ "${first_ipv4_rule}" == *'--to-destination 127.0.0.1:0'* ]] || {
+  echo 'FAIL: cleanup removed protection after forwarding deletion failed' >&2
+  exit 1
+}
 
 printf '%s\n' 'PASS: MagicDNS bridge dynamically forwards both DNS transports and cleans up safely'

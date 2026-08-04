@@ -27,10 +27,16 @@ lookup_ha_dns() {
 start_dnsmasq() {
   local pidfile=$1
   shift
+  local -a listen_addresses=()
+  while [[ "${1}" != '--' ]]; do
+    listen_addresses+=("${1}")
+    shift
+  done
+  shift
   dnsmasq "$@" &
   local pid=$!
   printf '%s\n' "${pid}" > "${pidfile}"
-  local _
+  local _ protocol address
   for _ in 1 2 3 4 5; do
     sleep 0.1
     if ! kill -0 "${pid}" 2>/dev/null; then
@@ -38,7 +44,15 @@ start_dnsmasq() {
       rm -f "${pidfile}"
       return 1
     fi
+    for protocol in u t; do
+      for address in "${listen_addresses[@]}"; do
+        ss -H -l -n "-${protocol}" "sport = :${DNS_PORT}" | grep -Fq -- "${address}" || continue 3
+      done
+    done
+    return 0
   done
+  stop_pid "${pidfile}"
+  return 1
 }
 
 prepare_egress() {
@@ -47,13 +61,13 @@ prepare_egress() {
   ha_dns=$(lookup_ha_dns)
   [[ -n "${ha_dns}" ]] || { echo 'Unable to resolve Home Assistant DNS for MagicDNS egress' >&2; return 1; }
   mkdir -p "${MAGICDNS_RUNTIME_DIR}"
-  local -a options=(--no-hosts --no-resolv --conf-file=/dev/null --keep-in-foreground --log-facility=- --cache-size=0 --bind-dynamic "--port=${DNS_PORT}")
+  local -a options=(--no-hosts --no-resolv --conf-file=/dev/null --keep-in-foreground --log-facility=- --cache-size=0 --bind-interfaces "--port=${DNS_PORT}")
   options+=("--listen-address=${EGRESS_ADDRESS}" '--address=/#/')
   local domain
   for domain in "${LOOP_BREAK_DOMAINS[@]}"; do
     options+=("--server=/${domain}/${ha_dns}")
   done
-  if ! start_dnsmasq "${EGRESS_PID}" "${options[@]}"; then
+  if ! start_dnsmasq "${EGRESS_PID}" "${EGRESS_ADDRESS}" -- "${options[@]}"; then
     rm -f "${RESOLV_CONF}"
     return 1
   fi
@@ -85,7 +99,7 @@ start_ingress() {
     [[ -n "${suffix}" ]] || { echo 'Unable to determine the tailnet MagicDNS suffix' >&2; return 1; }
     options+=('--address=/#/' "--server=/${suffix}/${MAGIC_DNS_IPV4}")
   fi
-  if ! start_dnsmasq "${INGRESS_PID}" "${options[@]}"; then
+  if ! start_dnsmasq "${INGRESS_PID}" "${tailscale_ipv4}" "${tailscale_ipv6}" -- "${options[@]}"; then
     return 1
   fi
   if ! "${MAGICDNS_BRIDGE}" setup; then
@@ -104,8 +118,17 @@ stop_pid() {
 }
 
 cleanup() {
-  "${MAGICDNS_BRIDGE}" setup-drop || true
-  "${MAGICDNS_BRIDGE}" cleanup || true
+  if ! "${MAGICDNS_BRIDGE}" setup-drop; then
+    echo 'MagicDNS temporary protection setup failed; leaving resolvers running' >&2
+    return 1
+  fi
+  if ! "${MAGICDNS_BRIDGE}" cleanup; then
+    echo 'MagicDNS forwarding cleanup failed; keeping temporary protection installed' >&2
+    stop_pid "${INGRESS_PID}"
+    stop_pid "${EGRESS_PID}"
+    rm -f "${RESOLV_CONF}"
+    return 1
+  fi
   stop_pid "${INGRESS_PID}"
   stop_pid "${EGRESS_PID}"
   rm -f "${RESOLV_CONF}"

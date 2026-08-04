@@ -12,7 +12,7 @@ ENV LANG=C.UTF-8
 COPY /files/install.sh /
 RUN chmod u+x,go= /install.sh && /install.sh "$BUILD_ARCH" "$TAILSCALE_VERSION"
 
-RUN apk add --no-cache iptables ip6tables dnsmasq bind-tools util-linux
+RUN apk add --no-cache iptables ip6tables dnsmasq bind-tools util-linux iproute2
 
 COPY run.sh /
 COPY files/magicdns-bridge.sh /magicdns-bridge.sh
