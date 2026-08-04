@@ -9,9 +9,13 @@ arch:
 image: "ghcr.io/iangelov/{arch}-app-tailscale"
 startup: services
 boot: auto
+hassio_api: true
 host_network: true
 privileged:
   - NET_ADMIN
+  # Required only to mount a private resolv.conf for tailscaled, preventing
+  # its MagicDNS upstream queries from looping through Home Assistant DNS.
+  - SYS_ADMIN
 devices:
   - "/dev/net/tun"
 init: false
@@ -19,6 +23,7 @@ options:
   hostname: homeassistant
   advertised_routes: []
   tags: []
+  accept_dns: true
   proxy_serve_ha: false
 schema:
   auth_key: str
@@ -28,6 +33,7 @@ schema:
   advertise_connector: bool?
   tags:
     - str
+  accept_dns: bool
   port: int(0,65535)?
   hostname: str?
   force_reauth: bool?
