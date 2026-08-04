@@ -59,6 +59,7 @@ exit 0
 make_fake magicdns-resolver '
 printf "%s\\n" "$*" >> "${MAGICDNS_TEST_LOG}"
 if [[ "$1" == prepare-egress && "${FAKE_PREPARE_FAIL:-false}" == true ]]; then exit 73; fi
+if [[ "$1" == cleanup && "${FAKE_CLEANUP_FAIL:-false}" == true ]]; then exit 75; fi
 '
 # shellcheck disable=SC2016 # The generated fake expands variables at runtime.
 make_fake unshare '
@@ -122,6 +123,23 @@ PATH="${tmpdir}/bin:${PATH}" \
 grep -Fx -- "-m bash -c mount --bind \"\$1\" /etc/resolv.conf; shift; exec \"\$@\" _ /run/tailscale/tailscaled-resolv.conf tailscaled --statedir /data --socket ${tmpdir}/socket/unshare-failed.sock" "${tmpdir}/unshare-failure.log"
 [[ ! -s "${tmpdir}/calls-unshare-failure.log" ]] || { echo 'FAIL: tailscale up ran after unshare failed' >&2; exit 1; }
 grep -Fx cleanup "${tmpdir}/magicdns-unshare-failure.log"
+
+# Production break caught: the real run.sh EXIT trap ignores a resolver
+# cleanup failure, so process shutdown can hide stale forwarding cleanup.
+: > "${tmpdir}/magicdns-cleanup-failure.log"
+set +e
+PATH="${tmpdir}/bin:${PATH}" \
+  TAILSCALE_SOCKET="${tmpdir}/socket/cleanup-failed.sock" \
+  TAILSCALE_TEST_LOG="${tmpdir}/calls-cleanup-failure.log" \
+  MAGICDNS_RESOLVER="${tmpdir}/bin/magicdns-resolver" \
+  MAGICDNS_TEST_LOG="${tmpdir}/magicdns-cleanup-failure.log" \
+  UNSHARE_TEST_LOG="${tmpdir}/unshare-cleanup-failure.log" \
+  FAKE_ACCEPT_DNS=false FAKE_CLEANUP_FAIL=true \
+  timeout 7 bash "${run_script}" >/dev/null 2>&1
+cleanup_status=$?
+set -e
+[[ "${cleanup_status}" -eq 1 ]] || { printf 'FAIL: expected propagated cleanup status 1, got %s\n' "${cleanup_status}" >&2; exit 1; }
+grep -Fx cleanup "${tmpdir}/magicdns-cleanup-failure.log"
 
 run_case true
 run_case false

@@ -21,10 +21,14 @@ run_magicdns() {
 # shellcheck disable=SC2329 # Invoked through the EXIT trap below.
 cleanup() {
   local status=$?
+  local cleanup_status=0
   if [[ "${MAGICDNS_ACTIVE}" == true ]]; then
-    run_magicdns cleanup || true
+    if ! run_magicdns cleanup; then
+      cleanup_status=1
+    fi
   fi
   [[ -z "${AUTH_KEY_FILE}" ]] || rm -f "${AUTH_KEY_FILE}"
+  [[ "${cleanup_status}" -eq 0 ]] || return "${cleanup_status}"
   return "${status}"
 }
 trap cleanup EXIT

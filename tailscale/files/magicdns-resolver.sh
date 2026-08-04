@@ -118,21 +118,29 @@ stop_pid() {
 }
 
 cleanup() {
+  local cleanup_status=0 protection_active=false forwarding_removed=false
   if ! "${MAGICDNS_BRIDGE}" setup-drop; then
-    echo 'MagicDNS temporary protection setup failed; leaving resolvers running' >&2
-    return 1
+    echo 'MagicDNS temporary protection setup failed; continuing forwarding cleanup' >&2
+    cleanup_status=1
+  else
+    protection_active=true
   fi
   if ! "${MAGICDNS_BRIDGE}" cleanup; then
     echo 'MagicDNS forwarding cleanup failed; keeping temporary protection installed' >&2
-    stop_pid "${INGRESS_PID}"
-    stop_pid "${EGRESS_PID}"
-    rm -f "${RESOLV_CONF}"
-    return 1
+    cleanup_status=1
+  else
+    forwarding_removed=true
   fi
   stop_pid "${INGRESS_PID}"
   stop_pid "${EGRESS_PID}"
   rm -f "${RESOLV_CONF}"
-  "${MAGICDNS_BRIDGE}" remove-drop || true
+  if [[ "${protection_active}" == true && "${forwarding_removed}" == true ]]; then
+    if ! "${MAGICDNS_BRIDGE}" remove-drop; then
+      echo 'MagicDNS temporary protection cleanup failed' >&2
+      cleanup_status=1
+    fi
+  fi
+  return "${cleanup_status}"
 }
 
 case "${1:-}" in

@@ -39,6 +39,7 @@ esac
 # shellcheck disable=SC2016 # The generated fake expands variables at runtime.
 make_fake magicdns-bridge '
 printf "%s\\n" "$*" >> "${FAKE_BRIDGE_LOG}"
+[[ "$1" == setup-drop && "${FAKE_BRIDGE_SETUP_DROP_FAIL:-false}" == true ]] && exit 50
 [[ "$1" == cleanup && "${FAKE_BRIDGE_CLEANUP_FAIL:-false}" == true ]] && exit 51
 exit 0
 '
@@ -94,6 +95,16 @@ if grep -Fxq remove-drop "${tmpdir}/bridge-failure.log"; then
   exit 1
 fi
 [[ ! -e "${tmpdir}/runtime/magicdns-egress.pid" ]] || { echo 'FAIL: egress resolver survived fail-safe teardown' >&2; exit 1; }
+
+# Production break caught: temporary protection failure returns before the
+# forwarding cleanup is attempted, leaving stale DNAT for process shutdown.
+run_resolver true prepare-egress
+if PATH="${tmpdir}/bin:${PATH}" FAKE_DNSMASQ_LOG="${tmpdir}/dnsmasq.log" FAKE_BRIDGE_LOG="${tmpdir}/bridge-drop-failure.log" FAKE_BRIDGE_SETUP_DROP_FAIL=true MAGICDNS_RUNTIME_DIR="${tmpdir}/runtime" MAGICDNS_BRIDGE="magicdns-bridge" ACCEPT_DNS=true bash "${resolver_script}" cleanup; then
+  echo 'FAIL: resolver cleanup hid temporary protection failure' >&2
+  exit 1
+fi
+grep -Fx setup-drop "${tmpdir}/bridge-drop-failure.log"
+grep -Fx cleanup "${tmpdir}/bridge-drop-failure.log"
 
 # Production break caught: an immediately exiting dnsmasq is treated as ready
 # and leaves an egress resolver file/PID for tailscaled to consume.
