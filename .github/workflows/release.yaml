@@ -26,6 +26,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -37,7 +38,7 @@ jobs:
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_USERNAME: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PREVIOUS_MAIN: ${{ github.event.before }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
@@ -78,7 +79,7 @@ jobs:
             if [[ "$bootstrap_tag" == true ]]; then
               push_refs+=("refs/tags/$previous_tag")
             fi
-            git push --atomic origin "${push_refs[@]}"
+            git -c credential.helper="!f() { echo username=x-access-token; echo password=\$GH_TOKEN; }; f" push --atomic origin "${push_refs[@]}"
             existing_tag="tailscale-v$version"
           fi
 
@@ -103,6 +104,7 @@ jobs:
       - name: Check out released version
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           ref: tailscale-v${{ needs.release.outputs.version }}
 
       - name: Get add-on information
@@ -133,6 +135,7 @@ jobs:
       - name: Check out released version
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           ref: tailscale-v${{ needs.release.outputs.version }}
 
       - name: Build and publish Tailscale add-on
