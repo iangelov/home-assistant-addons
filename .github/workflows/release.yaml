@@ -1,0 +1,193 @@
+name: Release Tailscale
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tailscale/**'
+      - 'scripts/**'
+      - '.github/workflows/release.yaml'
+
+concurrency:
+  group: tailscale-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: read
+    outputs:
+      published: ${{ steps.release.outputs.published }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Prepare and publish release
+        id: release
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIOUS_MAIN: ${{ github.event.before }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          git fetch origin main --tags
+          git checkout --detach origin/main
+
+          existing_tag="$(git tag --points-at HEAD --list 'tailscale-v*')"
+          if [[ -n "$existing_tag" ]]; then
+            if [[ "$RUN_ATTEMPT" == 1 ]]; then
+              echo "published=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            version="${existing_tag#tailscale-v}"
+          else
+            bootstrap_tag=false
+            if [[ -z "$(git tag --list 'tailscale-v*')" ]]; then
+              git tag tailscale-v1.102.3 "$PREVIOUS_MAIN"
+              bootstrap_tag=true
+            fi
+
+            previous_tag="$(git describe --tags --match 'tailscale-v*' --abbrev=0)"
+            current_version="${previous_tag#tailscale-v}"
+            version="$(node scripts/next-version.mjs "$current_version" "$previous_tag")"
+            if [[ -z "$version" ]]; then
+              echo "published=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            node scripts/verify-image-tags.mjs "$version"
+            node scripts/prepare-release.mjs "$version"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add tailscale/config.yaml
+            git commit -m "chore(tailscale): release $version [skip ci]"
+            git tag "tailscale-v$version"
+
+            push_refs=("HEAD:main" "refs/tags/tailscale-v$version")
+            if [[ "$bootstrap_tag" == true ]]; then
+              push_refs+=("refs/tags/$previous_tag")
+            fi
+            git -c credential.helper="!f() { echo username=x-access-token; echo password=\$GH_TOKEN; }; f" push --atomic origin "${push_refs[@]}"
+            existing_tag="tailscale-v$version"
+          fi
+
+          if ! gh release view "$existing_tag" >/dev/null 2>&1; then
+            gh release create "$existing_tag" --verify-tag --generate-notes --title "$existing_tag"
+          fi
+
+          echo "published=true" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  prepare:
+    runs-on: ubuntu-24.04
+    name: Prepare build matrix
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      version: ${{ fromJSON(steps.info.outputs.version) }}
+    steps:
+      - name: Check out released version
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: tailscale-v${{ needs.release.outputs.version }}
+
+      - name: Get add-on information
+        id: info
+        uses: home-assistant/actions/helpers/info@master
+        with:
+          path: "./tailscale"
+
+      - name: Prepare multi-arch matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.03.2
+        with:
+          architectures: '["aarch64", "amd64"]'
+          image-name: app-tailscale
+
+  build:
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.arch }} Tailscale add-on
+    needs: [release, prepare]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Check out released version
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: tailscale-v${{ needs.release.outputs.version }}
+
+      - name: Build and publish Tailscale add-on
+        uses: home-assistant/builder/actions/build-image@2026.03.2
+        with:
+          arch: ${{ matrix.arch }}
+          image: ${{ matrix.image }}
+          image-tags: ${{ needs.prepare.outputs.version }}
+          version: ${{ needs.prepare.outputs.version }}
+          context: tailscale
+          push: true
+          cosign: true
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  manifest:
+    runs-on: ubuntu-24.04
+    name: Publish multi-arch manifest
+    needs: [release, prepare, build]
+    permissions:
+      packages: write
+      id-token: write
+    steps:
+      - name: Publish multi-arch manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.03.2
+        with:
+          architectures: '["aarch64", "amd64"]'
+          image-name: app-tailscale
+          image-tags: ${{ needs.prepare.outputs.version }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  cleanup:
+    runs-on: ubuntu-24.04
+    name: Clean up old container images
+    needs: manifest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ["aarch64", "amd64"]
+    permissions:
+      packages: write
+    steps:
+      - name: Delete untagged images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ matrix.arch }}-app-tailscale
+          package-type: container
+          delete-only-untagged-versions: true
+          min-versions-to-keep: 10
+
+      - name: Keep only 5 most recent tagged versions
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ matrix.arch }}-app-tailscale
+          package-type: container
+          min-versions-to-keep: 5
