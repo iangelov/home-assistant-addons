@@ -3,21 +3,13 @@
   "extends": [
     "config:recommended"
   ],
+  "semanticCommits": "enabled",
   "regexManagers": [
     {
       "fileMatch": ["^tailscale/Dockerfile$"],
       "matchStringsStrategy": "any",
       "matchStrings": [
         "ARG TAILSCALE_VERSION=\"(?<currentValue>\\S+)\""
-      ],
-      "datasourceTemplate": "github-releases",
-      "depNameTemplate": "tailscale/tailscale"
-    },
-    {
-      "fileMatch": ["^tailscale/config.yaml$"],
-      "matchStringsStrategy": "any",
-      "matchStrings": [
-        "version:\\s+\"(?<currentValue>\\S+)\""
       ],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "tailscale/tailscale"
@@ -43,13 +35,23 @@
       "matchDatasources": ["github-releases"],
       "matchDepNames": ["tailscale/tailscale"],
       "matchUpdateTypes": ["minor", "patch"],
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "tailscale",
       "automerge": true
     },
     {
       "matchDatasources": ["docker"],
       "matchDepNames": ["ghcr.io/hassio-addons/base"],
       "matchUpdateTypes": ["minor", "patch"],
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "tailscale",
       "automerge": true
+    },
+    {
+      "description": "Keep workflow updates out of add-on releases",
+      "matchManagers": ["github-actions"],
+      "semanticCommitType": "chore",
+      "semanticCommitScope": "ci"
     }
   ]
 }

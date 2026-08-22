@@ -1,12 +1,6 @@
 name: Builder
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'tailscale/**'
-      - '.github/workflows/builder.yaml'
   pull_request:
     branches:
       - main
@@ -49,8 +43,6 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     permissions:
       contents: read
-      packages: write
-      id-token: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -63,50 +55,4 @@ jobs:
           image-tags: ${{ needs.prepare.outputs.version }}
           version: ${{ needs.prepare.outputs.version }}
           context: tailscale
-          push: ${{ github.event_name == 'push' }}
-          cosign: ${{ github.event_name == 'push' }}
-          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
-
-  manifest:
-    runs-on: ubuntu-24.04
-    name: Publish multi-arch manifest
-    needs: [prepare, build]
-    if: github.event_name == 'push'
-    permissions:
-      packages: write
-      id-token: write
-    steps:
-      - name: Publish multi-arch manifest
-        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.03.2
-        with:
-          architectures: '["aarch64", "amd64"]'
-          image-name: app-tailscale
-          image-tags: ${{ needs.prepare.outputs.version }}
-          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
-
-  cleanup:
-    runs-on: ubuntu-24.04
-    name: Clean up old container images
-    needs: manifest
-    if: github.event_name == 'push'
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: ["aarch64", "amd64"]
-    permissions:
-      packages: write
-    steps:
-      - name: Delete untagged images
-        uses: actions/delete-package-versions@v5
-        with:
-          package-name: ${{ matrix.arch }}-app-tailscale
-          package-type: container
-          delete-only-untagged-versions: true
-          min-versions-to-keep: 10
-
-      - name: Keep only 5 most recent tagged versions
-        uses: actions/delete-package-versions@v5
-        with:
-          package-name: ${{ matrix.arch }}-app-tailscale
-          package-type: container
-          min-versions-to-keep: 5
+          push: false
