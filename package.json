@@ -1,0 +1,9 @@
+{
+  "name": "home-assistant-addons-release-automation",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "validate:pr-title": "node scripts/validate-pr-title.mjs"
+  }
+}
