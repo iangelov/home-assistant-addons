@@ -16,7 +16,7 @@ on:
 
 jobs:
   prepare:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     name: Prepare build matrix
     permissions:
       contents: read
@@ -68,7 +68,7 @@ jobs:
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
 
   manifest:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     name: Publish multi-arch manifest
     needs: [prepare, build]
     if: github.event_name == 'push'
@@ -85,7 +85,7 @@ jobs:
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
 
   cleanup:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     name: Clean up old container images
     needs: manifest
     if: github.event_name == 'push'
