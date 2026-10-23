@@ -3,9 +3,10 @@
   "extends": [
     "github>iangelov/renovate-config"
   ],
-  "regexManagers": [
+  "customManagers": [
     {
-      "fileMatch": ["^tailscale/Dockerfile$"],
+      "customType": "regex",
+      "managerFilePatterns": ["/^tailscale/Dockerfile$/"],
       "matchStringsStrategy": "any",
       "matchStrings": [
         "ARG TAILSCALE_VERSION=\"(?<currentValue>\\S+)\""
@@ -14,7 +15,8 @@
       "depNameTemplate": "tailscale/tailscale"
     },
     {
-      "fileMatch": ["^tailscale/config.yaml$"],
+      "customType": "regex",
+      "managerFilePatterns": ["/^tailscale/config.yaml$/"],
       "matchStringsStrategy": "any",
       "matchStrings": [
         "version:\\s+\"(?<currentValue>\\S+)\""
@@ -23,7 +25,8 @@
       "depNameTemplate": "tailscale/tailscale"
     },
     {
-      "fileMatch": ["^tailscale/Dockerfile$"],
+      "customType": "regex",
+      "managerFilePatterns": ["/^tailscale/Dockerfile$/"],
       "matchStringsStrategy": "any",
       "matchStrings": [
         "ARG BASE_IMAGE_VERSION=(?<currentValue>[0-9.]+)"
