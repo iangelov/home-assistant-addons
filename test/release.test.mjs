@@ -10,7 +10,14 @@ test("creates the release at the built commit after publication", () => {
   const writes = [];
   createRelease("2.0.0", sha, repo, (command, args) => {
     assert.equal(command, "gh");
-    if (args[0] === "api") return missing();
+    if (args[0] === "api") {
+      if (args[1].includes("/commits/")) {
+        throw Object.assign(new Error("No commit found for SHA"), {
+          stderr: "gh: No commit found for SHA: tailscale-v2.0.0 (HTTP 422)",
+        });
+      }
+      return missing();
+    }
     writes.push(args);
     return "";
   });
