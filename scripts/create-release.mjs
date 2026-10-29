@@ -11,7 +11,8 @@ export function createRelease(version, sha, repo, run = execFileSync) {
       throw error;
     }
   }
-  const commit = get(`commits/${tag}`);
+  const ref = get(`git/ref/tags/${tag}`);
+  const commit = ref && get(`commits/${tag}`);
   if (commit && commit.sha !== sha) throw new Error(`${tag} already points to another commit`);
   if (!get(`releases/tags/${tag}`)) {
     run("gh", ["release", "create", tag, "--repo", repo, "--target", sha,
