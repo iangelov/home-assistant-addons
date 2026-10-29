@@ -1,112 +1,212 @@
 name: Builder
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'tailscale/**'
-      - '.github/workflows/builder.yaml'
   pull_request:
-    branches:
-      - main
-    paths:
-      - 'tailscale/**'
-      - '.github/workflows/builder.yaml'
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Serialize all publishers, including reruns. PR builds have their own group.
+concurrency:
+  group: tailscale-${{ github.event_name == 'push' && 'publish' || github.event.pull_request.number }}
+  queue: max
+  cancel-in-progress: false
 
 jobs:
-  prepare:
+  check:
+    name: Check version and tests
     runs-on: ubuntu-26.04
-    name: Prepare build matrix
-    permissions:
-      contents: read
     outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-      version: ${{ fromJSON(steps.info.outputs.version) }}
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Get add-on information
-        id: info
-        uses: home-assistant/actions/helpers/info@master
+      - uses: actions/checkout@v7
         with:
-          path: "./tailscale"
-
-      - name: Prepare multi-arch matrix
-        id: matrix
-        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.03.2
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
         with:
-          architectures: '["aarch64", "amd64"]'
-          image-name: app-tailscale
+          node-version: 24
+      - run: npm test
+      - name: Check version against the current base
+        id: version
+        env:
+          BEFORE: ${{ github.event.before }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" == pull_request ]]; then
+            git fetch origin main
+            if ! git merge-base --is-ancestor origin/main HEAD; then
+              echo '::error::This PR is behind main. Update it so its version bump can be checked again.'
+              exit 1
+            fi
+            BEFORE=origin/main
+          fi
+          node scripts/check-version.mjs "$BEFORE" HEAD
 
   build:
+    name: Build ${{ matrix.arch }}
+    if: github.event_name == 'pull_request'
+    needs: check
     runs-on: ${{ matrix.os }}
-    name: Build ${{ matrix.arch }} tailscale add-on
-    needs: prepare
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Build tailscale add-on
-        uses: home-assistant/builder/actions/build-image@2026.03.2
-        with:
-          arch: ${{ matrix.arch }}
-          image: ${{ matrix.image }}
-          image-tags: ${{ needs.prepare.outputs.version }}
-          version: ${{ needs.prepare.outputs.version }}
-          context: tailscale
-          push: ${{ github.event_name == 'push' }}
-          cosign: ${{ github.event_name == 'push' }}
-          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
-
-  manifest:
-    runs-on: ubuntu-26.04
-    name: Publish multi-arch manifest
-    needs: [prepare, build]
-    if: github.event_name == 'push'
-    permissions:
-      packages: write
-      id-token: write
-    steps:
-      - name: Publish multi-arch manifest
-        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.03.2
-        with:
-          architectures: '["aarch64", "amd64"]'
-          image-name: app-tailscale
-          image-tags: ${{ needs.prepare.outputs.version }}
-          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
-
-  cleanup:
-    runs-on: ubuntu-26.04
-    name: Clean up old container images
-    needs: manifest
-    if: github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
-        arch: ["aarch64", "amd64"]
-    permissions:
-      packages: write
+        include:
+          - {arch: aarch64, os: ubuntu-24.04-arm}
+          - {arch: amd64, os: ubuntu-24.04}
     steps:
-      - name: Delete untagged images
-        uses: actions/delete-package-versions@v5
+      - uses: actions/checkout@v7
         with:
-          package-name: ${{ matrix.arch }}-app-tailscale
-          package-type: container
-          delete-only-untagged-versions: true
-          min-versions-to-keep: 10
+          persist-credentials: false
+      - uses: home-assistant/builder/actions/build-image@2026.03.2
+        with:
+          arch: ${{ matrix.arch }}
+          image: ghcr.io/iangelov/${{ matrix.arch }}-app-tailscale
+          image-tags: ${{ needs.check.outputs.version }}
+          version: ${{ needs.check.outputs.version }}
+          context: tailscale
+          push: false
+          cosign: false
+          container-registry-password: ""
 
-      - name: Keep only 5 most recent tagged versions
-        uses: actions/delete-package-versions@v5
+  publish:
+    name: Publish ${{ matrix.arch }}
+    if: github.event_name == 'push' && needs.check.outputs.publish == 'true'
+    needs: check
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: aarch64, os: ubuntu-24.04-arm}
+          - {arch: amd64, os: ubuntu-24.04}
+    env:
+      IMAGE: ghcr.io/iangelov/${{ matrix.arch }}-app-tailscale:${{ needs.check.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v7
         with:
-          package-name: ${{ matrix.arch }}-app-tailscale
-          package-type: container
-          min-versions-to-keep: 5
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install registry inspection tool
+        run: sudo apt-get update && sudo apt-get install -y skopeo
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check for a previous publication from this commit
+        id: existing
+        run: node scripts/check-publication.mjs image "$IMAGE" "$ARCH" "$GITHUB_SHA"
+      - name: Build and publish the missing image
+        if: steps.existing.outputs.exists != 'true'
+        uses: home-assistant/builder/actions/build-image@2026.03.2
+        with:
+          arch: ${{ matrix.arch }}
+          image: ghcr.io/iangelov/${{ matrix.arch }}-app-tailscale
+          image-tags: ${{ needs.check.outputs.version }}
+          version: ${{ needs.check.outputs.version }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          context: tailscale
+          push: true
+          cosign: true
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify the published image
+        id: published
+        run: node scripts/check-publication.mjs image "$IMAGE" "$ARCH" "$GITHUB_SHA" --required
+      - uses: sigstore/cosign-installer@v4.1.0
+        if: steps.existing.outputs.exists == 'true'
+        with:
+          cosign-release: v2.5.3
+      # The builder signs new images. A previous attempt may have failed after pushing.
+      - name: Sign the reused digest
+        if: steps.existing.outputs.exists == 'true'
+        env:
+          DIGEST: ${{ steps.published.outputs.digest }}
+        run: cosign sign --yes "${IMAGE%:*}@$DIGEST"
+
+  release:
+    name: Publish manifest and release
+    needs: [check, publish]
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      IMAGE: ghcr.io/iangelov/app-tailscale:${{ needs.check.outputs.version }}
+      ARM_IMAGE: ghcr.io/iangelov/aarch64-app-tailscale:${{ needs.check.outputs.version }}
+      AMD_IMAGE: ghcr.io/iangelov/amd64-app-tailscale:${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install registry inspection tool
+        run: sudo apt-get update && sudo apt-get install -y skopeo
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v4
+        with:
+          version: v0.32.1
+      - name: Verify both architecture images still match this commit
+        run: |
+          node scripts/check-publication.mjs image "$ARM_IMAGE" aarch64 "$GITHUB_SHA" --required
+          node scripts/check-publication.mjs image "$AMD_IMAGE" amd64 "$GITHUB_SHA" --required
+      - name: Check for an existing matching manifest
+        id: existing
+        run: node scripts/check-publication.mjs manifest "$IMAGE" "$ARM_IMAGE" "$AMD_IMAGE"
+      - name: Publish the missing manifest
+        if: steps.existing.outputs.exists != 'true'
+        run: docker buildx imagetools create --tag "$IMAGE" "$ARM_IMAGE" "$AMD_IMAGE"
+      - name: Verify the published manifest
+        id: published
+        run: node scripts/check-publication.mjs manifest "$IMAGE" "$ARM_IMAGE" "$AMD_IMAGE" --required
+      - uses: sigstore/cosign-installer@v4.1.0
+        with:
+          cosign-release: v2.5.3
+      - name: Sign the published digest
+        env:
+          DIGEST: ${{ steps.published.outputs.digest }}
+        run: cosign sign --yes "${IMAGE%:*}@$DIGEST"
+      - name: Create the GitHub release after all images are ready
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/create-release.mjs "$VERSION"
+      - name: Summarize publication
+        run: echo "Published and signed Tailscale add-on $VERSION from $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
+
+  failure:
+    name: Report publication failure
+    if: always() && github.event_name == 'push' && contains(needs.*.result, 'failure')
+    needs: [check, publish, release]
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Explain recovery
+        run: |
+          echo '::error::Tailscale publication failed. Home Assistant may advertise an unavailable or incomplete version. See the failed job and rerun it after fixing the cause.'
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          Tailscale publication did not complete. Home Assistant may already advertise this version.
+
+          Re-run failed jobs on this run after resolving the reported registry/build/signing failure.
+          Existing images from this commit are reused; missing images are built; signing is retried.
+          If a tag belongs to another commit, fix the source and bump the version in a new PR.
+          Never delete or overwrite a published version to recover.
+          SUMMARY
+          exit 1
