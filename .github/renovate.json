@@ -16,16 +16,6 @@
     },
     {
       "customType": "regex",
-      "managerFilePatterns": ["/^tailscale/config.yaml$/"],
-      "matchStringsStrategy": "any",
-      "matchStrings": [
-        "version:\\s+\"(?<currentValue>\\S+)\""
-      ],
-      "datasourceTemplate": "github-releases",
-      "depNameTemplate": "tailscale/tailscale"
-    },
-    {
-      "customType": "regex",
       "managerFilePatterns": ["/^tailscale/Dockerfile$/"],
       "matchStringsStrategy": "any",
       "matchStrings": [
@@ -53,6 +43,20 @@
       "matchDepNames": ["ghcr.io/hassio-addons/base"],
       "matchUpdateTypes": ["minor", "patch"],
       "automerge": true
+    },
+    {
+      "description": "Bump the independent add-on version with dependency updates",
+      "matchFileNames": ["tailscale/Dockerfile"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [
+        {
+          "filePatterns": ["tailscale/config.yaml"],
+          "matchStrings": [
+            "(?:^|\\n)version:\\s*\"(?<version>\\d+\\.\\d+\\.\\d+)\""
+          ],
+          "bumpType": "patch"
+        }
+      ]
     }
   ]
 }
