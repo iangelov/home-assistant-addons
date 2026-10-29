@@ -12,6 +12,7 @@ permissions:
 # Serialize all publishers, including reruns. PR builds have their own group.
 concurrency:
   group: tailscale-${{ github.event_name == 'push' && 'publish' || github.event.pull_request.number }}
+  queue: max
   cancel-in-progress: false
 
 jobs:
