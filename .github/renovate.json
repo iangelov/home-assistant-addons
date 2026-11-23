@@ -1,8 +1,21 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "github>iangelov/renovate-config"
+    "config:recommended"
   ],
+  "reviewers": ["iangelov"],
+  "assignAutomerge": false,
+  "minimumReleaseAge": "3 days",
+  "minimumReleaseAgeBehaviour": "timestamp-required",
+  "internalChecksFilter": "strict",
+  "internalChecksAsSuccess": true,
+  "separateMinorPatch": true,
+  "platformAutomerge": false,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true,
+    "minimumReleaseAge": null
+  },
   "customManagers": [
     {
       "customType": "regex",
@@ -30,7 +43,8 @@
     {
       "description": "Automerge non-major updates",
       "matchUpdateTypes": ["minor", "patch"],
-      "automerge": true
+      "automerge": true,
+      "automergeType": "pr"
     },
     {
       "matchDatasources": ["github-releases"],
