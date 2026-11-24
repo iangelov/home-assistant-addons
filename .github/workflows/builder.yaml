@@ -127,7 +127,7 @@ jobs:
       - uses: sigstore/cosign-installer@v4.1.3
         if: steps.existing.outputs.exists == 'true'
         with:
-          cosign-release: v2.5.3
+          cosign-release: v2.6.5
       # The builder signs new images. A previous attempt may have failed after pushing.
       - name: Sign the reused digest
         if: steps.existing.outputs.exists == 'true'
@@ -180,7 +180,7 @@ jobs:
         run: node scripts/check-publication.mjs manifest "$IMAGE" "$ARM_IMAGE" "$AMD_IMAGE" --required
       - uses: sigstore/cosign-installer@v4.1.3
         with:
-          cosign-release: v2.5.3
+          cosign-release: v2.6.5
       - name: Sign the published digest
         env:
           DIGEST: ${{ steps.published.outputs.digest }}
