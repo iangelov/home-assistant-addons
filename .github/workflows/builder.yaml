@@ -164,7 +164,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/setup-buildx-action@v4
         with:
-          version: v0.32.1
+          version: v0.39.1
       - name: Verify both architecture images still match this commit
         run: |
           node scripts/check-publication.mjs image "$ARM_IMAGE" aarch64 "$GITHUB_SHA" --required
