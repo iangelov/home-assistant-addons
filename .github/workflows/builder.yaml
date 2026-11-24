@@ -29,7 +29,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
       - run: npm test
       - name: Check version against the current base
         id: version
@@ -97,7 +97,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
       - name: Install registry inspection tool
         run: sudo apt-get update && sudo apt-get install -y skopeo
       - uses: docker/login-action@v4
@@ -154,7 +154,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
       - name: Install registry inspection tool
         run: sudo apt-get update && sudo apt-get install -y skopeo
       - uses: docker/login-action@v4
