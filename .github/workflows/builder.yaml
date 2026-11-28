@@ -124,7 +124,7 @@ jobs:
       - name: Verify the published image
         id: published
         run: node scripts/check-publication.mjs image "$IMAGE" "$ARCH" "$GITHUB_SHA" --required
-      - uses: sigstore/cosign-installer@v4.1.3
+      - uses: sigstore/cosign-installer@v4.1.4
         if: steps.existing.outputs.exists == 'true'
         with:
           cosign-release: v3.1.5
@@ -178,7 +178,7 @@ jobs:
       - name: Verify the published manifest
         id: published
         run: node scripts/check-publication.mjs manifest "$IMAGE" "$ARM_IMAGE" "$AMD_IMAGE" --required
-      - uses: sigstore/cosign-installer@v4.1.3
+      - uses: sigstore/cosign-installer@v4.1.4
         with:
           cosign-release: v3.1.5
       - name: Sign the published digest
